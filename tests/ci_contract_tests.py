@@ -126,8 +126,8 @@ class CIContracts(unittest.TestCase):
         self.assertEqual(workflow['permissions'],{'contents':'read'})
         self.assertEqual(set(workflow['on']),{'push','pull_request','workflow_dispatch'})
         entries=workflow['jobs']['native']['strategy']['matrix']['include']
-        self.assertEqual(len(entries),8)
-        self.assertEqual({(x['os'],x['arch'],x['configuration']) for x in entries},{(os,arch,config) for os,arch in [('windows-2022','x86'),('windows-2022','x64'),('macos-15-intel','x64'),('macos-15','arm64')] for config in ['Debug','Release']})
+        self.assertEqual(len(entries),4)
+        self.assertEqual({(x['os'],x['arch'],x['configuration']) for x in entries},{(os,arch,config) for os,arch in [('windows-2022','x86'),('windows-2022','x64'),('macos-15-intel','x64'),('macos-15','arm64')] for config in ['Release']})
         steps=workflow['jobs']['native']['steps'];names=[x.get('name','') for x in steps]
         self.assertLess(names.index('Run offline suites and native IPC tests'),names.index('Build, inspect and stage native addon'))
         setup=[x for x in steps if x.get('uses')=='./.github/actions/setup']

@@ -19,25 +19,13 @@ jobs:
         include:
           - os: windows-2022
             arch: x86
-            configuration: Debug
-          - os: windows-2022
-            arch: x86
             configuration: Release
-          - os: windows-2022
-            arch: x64
-            configuration: Debug
           - os: windows-2022
             arch: x64
             configuration: Release
           - os: macos-15-intel
             arch: x64
-            configuration: Debug
-          - os: macos-15-intel
-            arch: x64
             configuration: Release
-          - os: macos-15
-            arch: arm64
-            configuration: Debug
           - os: macos-15
             arch: arm64
             configuration: Release

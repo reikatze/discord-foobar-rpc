@@ -12,12 +12,12 @@ Both workflows trigger on push, pull request and manual dispatch. Permissions ar
 
 | Runner | Native architecture | Configurations | Addon output |
 |---|---|---|---|
-| windows-2022 | x86 / Win32 | Debug, Release | `discord-foobar-rpc.dll` |
-| windows-2022 | x64 | Debug, Release | `discord-foobar-rpc.dll` |
-| macos-15-intel | x86_64 | Debug, Release | `discord-foobar-rpc.component` |
-| macos-15 | arm64 | Debug, Release | `discord-foobar-rpc.component` |
+| windows-2022 | x86 / Win32 | Release | `discord-foobar-rpc.dll` |
+| windows-2022 | x64 | Release | `discord-foobar-rpc.dll` |
+| macos-15-intel | x86_64 | Release | `discord-foobar-rpc.component` |
+| macos-15 | arm64 | Release | `discord-foobar-rpc.component` |
 
-Each job runs 16 Python CI-helper contract tests and seven CTest executables, then builds the native addon. Tests must pass before the addon build runs. Mac sanitizer jobs additionally run AddressSanitizer/UndefinedBehaviorSanitizer or ThreadSanitizer on the production core and tests.
+Each job runs 19 Python CI-helper contract tests and seven CTest executables, then builds the native addon. Tests must pass before the addon build runs. Mac sanitizer jobs additionally run AddressSanitizer/UndefinedBehaviorSanitizer or ThreadSanitizer on the production core and tests.
 
 Windows uses the official SDK library project references and Visual Studio 2022/MSBuild. macOS uses the SDK library projects in the workspace and a shared component scheme. Build inspection checks the real exported `foobar2000_get_interface` entrypoint; Windows inspection also checks the DLL architecture/type. Mac inspection checks architecture and verifies an ad-hoc signature after compilation. These are binary structural checks, not proof of loading inside foobar.
 
@@ -57,9 +57,9 @@ python tests/ci_contract_tests.py
 
 The Python contract tests require PyYAML; CI installs pinned PyYAML and provisions native 7-Zip for SDK extraction. Native build preparation and commands are scripted in `tools/prepare.py` and `tools/run.py`; see the workflow steps for platform flags and vcpkg setup.
 
-CTest emits `out/ci/test-results.xml`; failures print their log into the job output. Native DLLs are under `out/<Win32|x64>/<Debug|Release>/`. Mac bundles are under `out/xcode/Build/Products/<Debug|Release>/`. After binary inspection succeeds, `tools/run.py` stages one artifact under `out/artifacts/discord-foobar-rpc-<platform>-<arch>-<configuration>/`. Windows stages the real DLL; macOS archives the complete `.component` bundle as a tar.gz to preserve executable permissions, bundle contents and signing data during artifact download. Each artifact includes `LICENSE`, `THIRD_PARTY_NOTICES.md`, and `SHA256SUMS.txt`. A missing or empty native binary fails staging.
+CTest emits `out/ci/test-results.xml`; failures print their log into the job output. Native DLLs are under `out/<Win32|x64>/Release/`. Mac bundles are under `out/xcode/Build/Products/Release/`. After binary inspection succeeds, `tools/run.py` stages one artifact under `out/artifacts/discord-foobar-rpc-<platform>-<arch>-<configuration>/`. Windows stages the real DLL; macOS archives the complete `.component` bundle as a tar.gz to preserve executable permissions, bundle contents and signing data during artifact download. Each artifact includes `LICENSE`, `THIRD_PARTY_NOTICES.md`, and `SHA256SUMS.txt`. A missing or empty native binary fails staging.
 
-Download the matching artifact from the workflow run’s **Artifacts** section. All eight Debug/Release matrix jobs upload separate artifacts, retained for 30 days. Use Release for normal testing. Extract the outer GitHub artifact ZIP, then on macOS run `tar -xzf discord-foobar-rpc.component.tar.gz`. Upload only runs after the current job’s tests, build and inspection succeed; a failed platform does not cancel the remaining matrix jobs. No GitHub release is published.
+Download the matching artifact from the workflow run’s **Artifacts** section. All four Release matrix jobs upload separate artifacts, retained for 30 days. Extract the outer GitHub artifact ZIP, then on macOS run `tar -xzf discord-foobar-rpc.component.tar.gz`. Upload only runs after the current job’s tests, build and inspection succeed; a failed platform does not cancel the remaining matrix jobs. No GitHub release is published.
 
 ## Validation limits
 
