@@ -208,7 +208,13 @@ class CIContracts(unittest.TestCase):
                     self.assertEqual(args[2].read_bytes(),b'x64')
                     self.assertEqual(args[3].read_bytes(),b'arm64')
                     args[-1].write_bytes(b'universal')
-            with patch.object(packager,'inspect_pe') as inspect,patch.object(packager,'command',side_effect=command) as commands:
+            original_from_file=zipfile.ZipInfo.from_file
+            def windows_zip_info(*args,**kwargs):
+                entry=original_from_file(*args,**kwargs)
+                entry.create_system=0
+                entry.external_attr=0o100666<<16
+                return entry
+            with patch.object(packager,'inspect_pe') as inspect,patch.object(packager,'command',side_effect=command) as commands,patch.object(zipfile.ZipInfo,'from_file',side_effect=windows_zip_info):
                 packager.package(inputs,destination)
                 self.assertEqual([x.args[1] for x in inspect.call_args_list],['x86','x64'])
                 calls=[x.args[0] for x in commands.call_args_list]
@@ -220,7 +226,9 @@ class CIContracts(unittest.TestCase):
                 self.assertEqual(archive.read(name+'.dll'),b'x86')
                 self.assertEqual(archive.read('x64/'+name+'.dll'),b'x64')
                 self.assertEqual(archive.read(mac+'MacOS/'+name),b'universal')
-                self.assertTrue((archive.getinfo(mac+'MacOS/'+name).external_attr>>16)&0o111)
+                executable=archive.getinfo(mac+'MacOS/'+name)
+                self.assertEqual(executable.create_system,3)
+                self.assertEqual((executable.external_attr>>16)&0o777,0o755)
                 self.assertIsNone(archive.testzip())
             destination.unlink()
             with patch.object(packager,'inspect_pe'),patch.object(packager,'command',side_effect=RuntimeError('signing failed')),self.assertRaisesRegex(RuntimeError,'signing failed'):

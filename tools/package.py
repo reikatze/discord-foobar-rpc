@@ -78,7 +78,12 @@ def package(inputs, destination):
         with zipfile.ZipFile(staged, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
             for file in sorted(payload.rglob('*')):
                 if file.is_file():
-                    archive.write(file, file.relative_to(payload).as_posix())
+                    entry = zipfile.ZipInfo.from_file(file, file.relative_to(payload).as_posix())
+                    if file == binary:
+                        # Windows chmod/stat cannot represent Unix executable bits.
+                        entry.create_system = 3
+                        entry.external_attr = (stat.S_IFREG | 0o755) << 16
+                    archive.writestr(entry, file.read_bytes(), compress_type=zipfile.ZIP_DEFLATED)
         with zipfile.ZipFile(staged) as archive:
             if archive.testzip() is not None:
                 raise RuntimeError('Component package integrity check failed')
