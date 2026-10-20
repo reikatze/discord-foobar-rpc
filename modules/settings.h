@@ -7,4 +7,5 @@ void write_settings(const Settings& settings);
 std::filesystem::path select_cache_folder();
 void settings_changed();
 std::string component_status();
+bool retry_current_track();
 }

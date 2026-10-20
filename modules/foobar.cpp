@@ -87,4 +87,5 @@ void start_component() {
 void stop_component() noexcept {events.reset();service.reset();}
 void settings_changed(){if(events)events->refresh_settings();}
 std::string component_status(){return service?service->status():"Component inactive";}
+bool retry_current_track(){return service&&service->retry_current_track();}
 }

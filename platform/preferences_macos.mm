@@ -28,6 +28,8 @@
     apply.frame=NSMakeRect(385,52,95,28);[view addSubview:apply];
     NSButton* reset=[NSButton buttonWithTitle:@"Defaults" target:self action:@selector(resetSettings:)];
     reset.frame=NSMakeRect(280,52,95,28);[view addSubview:reset];
+    NSButton* retry=[NSButton buttonWithTitle:@"Retry current track" target:self action:@selector(retryCurrentTrack:)];
+    retry.frame=NSMakeRect(15,52,165,28);[view addSubview:retry];
     self.statusLabel=[NSTextField wrappingLabelWithString:@""];self.statusLabel.frame=NSMakeRect(15,8,465,40);[view addSubview:self.statusLabel];
     auto settings=music_tracker::read_settings();
     self.enabled.state=settings.enabled?NSControlStateValueOn:NSControlStateValueOff;
@@ -43,6 +45,11 @@
     }
     music_tracker::write_settings(settings);
     self.statusLabel.stringValue=[NSString stringWithUTF8String:music_tracker::component_status().c_str()];
+}
+- (void)retryCurrentTrack:(id)sender {
+    (void)sender;
+    if(music_tracker::retry_current_track())self.statusLabel.stringValue=[NSString stringWithUTF8String:music_tracker::component_status().c_str()];
+    else self.statusLabel.stringValue=@"Play a track and enable Discord Rich Presence before retrying.";
 }
 - (void)resetSettings:(id)sender {
     (void)sender;self.verboseLogging.state=NSControlStateValueOff;self.enabled.state=NSControlStateValueOn;self.applicationID.stringValue=@"";

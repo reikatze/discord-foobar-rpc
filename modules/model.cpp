@@ -133,9 +133,9 @@ void apply_filename_fallback(Track& t,const std::string& filename) {
 }
 std::string lookup_key(const Track& t) {
     // Full canonical key is retained in cache records to detect any filename hash collision.
-    // Recheck filename results cached before per-side cleanup and video album matching.
+    // Recheck filename results cached before the album-recording fallback.
     const bool filename=t.title.empty()&&t.artist.empty()&&!t.fallback_title.empty()&&!t.fallback_artist.empty();
-    const auto version=filename?"v5-studio-artwork":"v2";
+    const auto version=filename?"v6-album-recordings":"v2";
     auto key=json::array({version, normalized(t.recording_id), normalized(t.release_id), normalized(t.release_group_id),
         normalized(t.title), normalized(t.artist), normalized(t.album), normalized(t.album_artist),
         t.track_number, t.disc_number, std::isfinite(t.duration) && t.duration > 0 ? static_cast<long long>(t.duration) : 0,

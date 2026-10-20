@@ -24,6 +24,85 @@ HttpResponse ordinary(const std::string& url){
 Track identified(){Track t;t.recording_id=recording;t.release_id=release;t.duration=180;return t;}
 }
 int main(){Suite s;
+ s.test("duplicate releases do not exhaust the album detail budget",[]{
+    TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;Track t;apply_filename_fallback(t,"Artist - Song (Official Video).webm");
+    const std::string other="44444444-4444-4444-8444-444444444444";unsigned details=0;
+    f.response=[&](const std::string& url){
+        if(url.find("recording/?query=")!=std::string::npos){
+            json rows=json::array();
+            if(url.find("recording%3A%22Song%22")!=std::string::npos)for(unsigned i=0;i<8;++i){
+                std::ostringstream id;id<<std::hex<<std::setw(8)<<std::setfill('0')<<i<<"-1111-4111-8111-111111111111";
+                rows.push_back({{"id",id.str()},{"score",100},{"title","Song"},{"artist-credit",credits("Artist")},{"releases",json::array({{{"id",i==7?other:release},{"title","Album"}}})}});
+            }
+            return ok({{"recordings",rows}});
+        }
+        if(url.starts_with("https://musicbrainz.org/ws/2/release/")){++details;return ok({{"id",url.find(other)!=std::string::npos?other:release},{"title","Album"},{"status","Official"},{"release-group",{{"id",group},{"primary-type","Album"}}}});}
+        if(url.starts_with("https://musicbrainz.org/ws/2/release-group/"))return ok({{"id",group},{"title","Album"}});
+        return ordinary(url);
+    };
+    MusicBrainz mb(cache,f.request(),f.timing());const auto m=mb.lookup(t,[]{return false;});
+    require(details==2&&!m.artwork_url.empty()&&m.release_group_id==group,"Duplicate editions consumed unique-release budget");
+ });
+ s.test("release failures preserve verified song fields without caching failed work",[]{
+    TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;
+    f.response=[](const std::string& url){if(url.starts_with("https://musicbrainz.org/ws/2/release/"))return HttpResponse{503,"","120"};return ordinary(url);};
+    MusicBrainz mb(cache,f.request(),f.timing());auto t=identified();bool caught=false;
+    try{mb.lookup(t,[]{return false;});}catch(const LookupFailure& error){caught=true;require(error.metadata.title=="Recovered song"&&error.metadata.artist=="Recovered artist"&&error.retry_at>=unix_now()+119,"Verified text or server retry deadline lost");}
+    require(caught&&!cache.get(lookup_key(t)),"Failed release lookup was cached or swallowed");
+ });
+ s.test("manual refresh bypasses song misses and negative artwork without discarding positive covers",[]{
+    TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;bool available=false;unsigned covers=0;
+    f.response=[&](const std::string& url){if(url.starts_with("https://coverartarchive.org/")){++covers;if(!available)return HttpResponse{404,"",""};}return ordinary(url);};
+    MusicBrainz mb(cache,f.request(),f.timing());auto t=identified();
+    require(mb.lookup(t,[]{return false;}).artwork_url.empty(),"Missing cover unexpectedly resolved");
+    const auto before=f.urls.size();available=true;mb.lookup(t,[]{return false;});require(f.urls.size()==before,"Normal lookup ignored cache");
+    require(!mb.lookup_result(t,[]{return false;},true).metadata.artwork_url.empty(),"Manual retry reused negative artwork cache");
+    const auto count=covers;mb.lookup_result(t,[]{return false;},true);require(covers==count,"Manual retry needlessly downloaded a positive cover URL");
+ });
+ s.test("video-only search results fall back to album audio with matching names",[]{
+    for(const std::string filename:{"Alice In Chains - Man in the Box (Official Video) [TAqZb52sgpU].webm","Man in the Box (Official Video) [TAqZb52sgpU] - Alice In Chains.webm"})
+    for(int outcome:{0,1,2,3}) {
+        TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;Track t;t.duration=286;apply_filename_fallback(t,filename);
+        unsigned searches=0,fallbacks=0,covers=0;
+        f.response=[&](const std::string& url){
+            if(url.find("recording/?query=")!=std::string::npos) {
+                ++searches;json rows=json::array();
+                const bool fallback=url.find("video%3Afalse")!=std::string::npos;
+                if(fallback) {
+                    ++fallbacks;
+                    require(url.find("primarytype%3Aalbum")!=std::string::npos&&url.find("status%3Aofficial")!=std::string::npos,"Fallback lacks album constraints");
+                    require(url.find("recording%3A%22Man%20in%20the%20Box%22")!=std::string::npos&&url.find("artist%3A%22Alice%20in%20Chains%22")!=std::string::npos,"Fallback lost verified names");
+                    if(outcome==3)return HttpResponse{503,"","60"};
+                    for(unsigned i=0;i<2;++i) {
+                        auto album_group=json{{"id",outcome==1&&i?release:group},{"primary-type","Album"},{"secondary-types",json::array()}};
+                        rows.push_back({{"id",i?release:recording},{"score",100},{"video",false},{"title","Man in the Box"},{"length",270000+i*1000},
+                            {"artist-credit",credits(outcome==2?"Unrelated artist":"Alice in Chains")},
+                            {"releases",json::array({{{"id",group},{"title","Facelift"},{"status","Official"},{"release-group",album_group}}})}});
+                    }
+                } else if(url.find("recording%3A%22Man%20in%20the%20Box%22")!=std::string::npos) {
+                    for(const char* id:{"8ffa9ab2-0350-4a34-8034-aaf4e9451add","b30ce13f-aa23-4f86-9b0b-3aad62c7e0fb","2374e717-863c-4480-b49c-b575255788c1","ced9b0c5-a0f8-4e81-8999-af48b65b3beb","66418d1d-5559-4232-8d55-89fcca4dad7a"})
+                        rows.push_back({{"id",id},{"score",100},{"video",true},{"title","Man in the Box"},{"length",270000},{"artist-credit",credits("Alice in Chains")}});
+                }
+                return ok({{"recordings",rows}});
+            }
+            if(url.starts_with("https://musicbrainz.org/ws/2/release-group/"))return ok({{"id",group},{"title","Facelift"}});
+            if(url.starts_with("https://coverartarchive.org/")){++covers;require(url.find(group)!=std::string::npos,"Wrong album cover requested");return ordinary(url);}
+            throw std::runtime_error("Unexpected album fallback endpoint");
+        };
+        MusicBrainz mb(cache,f.request(),f.timing());
+        if(outcome==3){throws<std::exception>([&]{mb.lookup(t,[]{return false;});},"Rate limit ignored");require(!cache.get(lookup_key(t)),"Failed fallback cached");}
+        else {
+            const auto m=mb.lookup(t,[]{return false;});
+            require(m.title=="Man in the Box"&&m.artist=="Alice in Chains"&&m.recording_id.empty()&&m.duration==0,"Album fallback changed recording identity or timing");
+            if(outcome==0) {
+                require(m.album=="Facelift"&&m.release_group_id==group&&!m.artwork_url.empty()&&m.complete&&covers==1,"Standalone video results blocked album artwork");
+                Playback p;p.active=true;p.track=t;PlaybackClock clock;
+                require(make_activity(p,m,clock)["assets"]["large_image"]==m.artwork_url,"Recovered cover absent from Discord presence");
+            } else require(m.artwork_url.empty()&&m.release_group_id.empty()&&covers==0,"Conflicting or mismatched fallback selected artwork");
+        }
+        require(searches==3&&fallbacks==1,"Fallback was not bounded to one extra search");
+    }
+ });
  s.test("sparse studio and live recording search results recover one studio album",[]{
     TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;Track t;t.duration=286;apply_filename_fallback(t,"Man in the Box (Official Video) [TAqZb52sgpU] - Alice In Chains.webm");unsigned details=0;
     const std::string live_recording="44444444-4444-4444-8444-444444444444",live_release="55555555-5555-4555-8555-555555555555",live_group="66666666-6666-4666-8666-666666666666";
@@ -254,7 +333,7 @@ int main(){Suite s;
  s.test("HTTPS validation and encoding reject local paths",[]{require(!public_https_url("file:///cover.jpg")&&!public_https_url("https://user@archive.org/a"),"Unsafe URL accepted");require(url_encode("a /b") == "a%20%2Fb","URL encoding incorrect");HttpClient http;throws<LookupCancelled>([&]{http.get("https://musicbrainz.org",[]{return true;});},"HTTP cancellation did not precede transfer");});
  s.test("missing artist requires actual duration evidence, not a missing length",[]{TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;Track t;t.title="Song";t.duration=180;f.response=[](const std::string&){return ok({{"recordings",json::array({{{"id",recording},{"score",100},{"title","Song"},{"artist-credit",credits("Unknown")}}})}});};MusicBrainz mb(cache,f.request(),f.timing());require(mb.lookup(t,[]{return false;}).artist.empty(),"Missing response length was treated as duration evidence");});
 
- s.test("complete songs share compact release lookup and artwork URL",[]{TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;f.response=ordinary;MusicBrainz mb(cache,f.request(),f.timing());auto a=identified();a.title="Song one";a.artist="Artist";mb.lookup(a,[]{return false;});auto before=f.urls.size();auto b=a;b.title="Song two";b.recording_id="44444444-4444-4444-8444-444444444444";auto m=mb.lookup(b,[]{return false;});require(!m.artwork_url.empty()&&f.urls.size()==before,"Album playback repeated release/artwork HTTP requests");require(cache.maintenance_runs()==2,"Each uncached song should maintain its batched writes once");});
+ s.test("complete songs share compact release lookup and artwork URL",[]{TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;f.response=ordinary;MusicBrainz mb(cache,f.request(),f.timing());auto a=identified();a.title="Song one";a.artist="Artist";mb.lookup(a,[]{return false;});auto before=f.urls.size();auto b=a;b.title="Song two";b.recording_id="44444444-4444-4444-8444-444444444444";auto m=mb.lookup(b,[]{return false;});require(!m.artwork_url.empty()&&f.urls.size()==before,"Album playback repeated release/artwork HTTP requests");require(cache.maintenance_runs()==1,"Consecutive songs unnecessarily rescanned the cache");});
  s.test("release summary upgrades to tracks only for missing display fields",[]{TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;unsigned full=0,summary=0;f.response=[&](const std::string& url){if(url.starts_with("https://musicbrainz.org/ws/2/release/")){bool tracks=url.find("recordings")!=std::string::npos;if(tracks)++full;else ++summary;return ok({{"id",release},{"title","Album"},{"media",json::array({{{"position",1},{"tracks",json::array({{{"position",3},{"title","Recovered track"},{"recording",{{"id",recording},{"artist-credit",credits("Artist")}}}}})}}})}});}return ordinary(url);};MusicBrainz mb(cache,f.request(),f.timing());auto a=identified();a.title="Tagged track";a.artist="Artist";mb.lookup(a,[]{return false;});Track b;b.release_id=release;b.track_number=3;b.disc_number=1;b.duration=180;auto recovered=mb.lookup(b,[]{return false;});require(recovered.title=="Recovered track"&&recovered.artist=="Artist","Full-track upgrade did not recover missing fields");require(summary==1&&full==1,"Summary/full request selection incorrect");a.title="Third tagged track";mb.lookup(a,[]{return false;});require(summary==1&&full==1,"Full cache did not also satisfy a summary lookup");});
  s.test("release-detail cache expires and remains bounded",[]{TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;f.response=ordinary;MusicBrainz mb(cache,f.request(),f.timing());Track t;t.title="Song";t.artist="Artist";t.duration=180;for(unsigned i=0;i<65;++i){std::ostringstream id;id<<std::hex<<std::setw(8)<<std::setfill('0')<<i<<"-2222-4222-8222-222222222222";t.release_id=id.str();mb.lookup(t,[]{return false;});}t.release_id="00000000-2222-4222-8222-222222222222";t.title="New first-release song";auto before=f.urls.size();mb.lookup(t,[]{return false;});require(f.urls.size()==before+1,"Oldest detail cache entry was not evicted");f.now+=std::chrono::hours(25);t.title="After expiry";before=f.urls.size();mb.lookup(t,[]{return false;});require(f.urls.size()==before+1,"Expired release details were reused");});
  s.test("group-only songs share compact group details",[]{TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;f.response=[](const std::string& url){if(url.starts_with("https://musicbrainz.org/ws/2/release-group/"))return ok({{"id",group},{"title","Album"}});return ordinary(url);};MusicBrainz mb(cache,f.request(),f.timing());Track a;a.title="First";a.artist="Artist";a.duration=180;a.release_group_id=group;auto first=mb.lookup(a,[]{return false;});auto before=f.urls.size();a.title="Second";auto second=mb.lookup(a,[]{return false;});require(!first.artwork_url.empty()&&second.album=="Album"&&f.urls.size()==before,"Group-only songs repeated detail/artwork requests");require(f.urls.front().find("inc=artists")==std::string::npos,"Unused group artists were requested");});

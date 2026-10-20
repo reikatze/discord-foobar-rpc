@@ -1,6 +1,6 @@
 #include <windows.h>
 #include "resource.h"
-IDD_MUSIC_PREFERENCES DIALOGEX 0,0,300,196
+IDD_MUSIC_PREFERENCES DIALOGEX 0,0,300,226
 STYLE DS_SETFONT | DS_FIXEDSYS | WS_CHILD | DS_CONTROL
 CAPTION "discord-foobar-rpc"
 FONT 9,"Segoe UI"
@@ -12,5 +12,6 @@ BEGIN
     LTEXT "MusicBrainz supplies missing metadata and cover art. Cached artwork URLs are reused automatically.",-1,10,103,275,26
     CONTROL "Verbose diagnostic logging (foobar console)",IDC_VERBOSE_LOGGING,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,10,135,275,15
     LTEXT "Errors and lookup summaries are always logged. Enable for candidates, request URLs and artwork URLs.",-1,10,153,275,22
-    LTEXT "",IDC_STATUS,10,176,275,18
+    PUSHBUTTON "Retry current track",IDC_RETRY_CURRENT_TRACK,10,178,100,16
+    LTEXT "",IDC_STATUS,10,201,275,22
 END

@@ -42,7 +42,7 @@ std::int64_t MetadataCache::put(const std::string& key,const Metadata& metadata,
     std::filesystem::path temporary;
     try {
         if(!prepared_){std::filesystem::create_directories(folder_);prepared_=true;}
-        auto path=filename(key);temporary=path;temporary += ".tmp";
+        auto path=filename(key);const bool existed=std::filesystem::exists(path);temporary=path;temporary += ".tmp";
         json record={{"version",1},{"key",key},{"expires",expires},{"metadata",metadata}};
         {std::ofstream stream(temporary,std::ios::binary|std::ios::trunc);stream<<record.dump();stream.flush();if(!stream)throw std::runtime_error("Cache write failed");}
 #ifdef _WIN32
@@ -51,7 +51,7 @@ std::int64_t MetadataCache::put(const std::string& key,const Metadata& metadata,
         std::filesystem::permissions(temporary,std::filesystem::perms::owner_read|std::filesystem::perms::owner_write);
         std::filesystem::rename(temporary,path);
 #endif
-        dirty_=true;
+        dirty_=true;++writes_since_scan_;if(!existed)++new_entries_;
         if(!batch_depth_)maintain();
     } catch (...) {std::error_code error;if(!temporary.empty())std::filesystem::remove(temporary,error);}
     return expires;
@@ -59,7 +59,11 @@ std::int64_t MetadataCache::put(const std::string& key,const Metadata& metadata,
 void MetadataCache::end_batch() const noexcept {if(batch_depth_)--batch_depth_;if(!batch_depth_)maintain();}
 void MetadataCache::maintain() const noexcept {
     if(!dirty_)return;
-    try{trim();dirty_=false;++maintenance_runs_;}catch(...){} // Retry maintenance after a future write.
+    try {
+        const auto now=now_?now_():MonoClock::now();
+        if(scanned_&&now<next_scan_&&writes_since_scan_<128&&known_entries_+new_entries_<=4096)return;
+        trim();dirty_=false;scanned_=true;writes_since_scan_=0;new_entries_=0;next_scan_=now+std::chrono::minutes(5);++maintenance_runs_;
+    }catch(...){} // Retry maintenance after a future write.
 }
 std::optional<std::string> MetadataCache::artwork(const std::string& entity) const {
     if (auto hit=get("art:"+entity))return hit->artwork_url;
@@ -77,9 +81,10 @@ void MetadataCache::trim() const {
         if (!std::all_of(name.begin(),name.begin()+16,[](unsigned char c){return std::isxdigit(c);}))continue;
         entries.push_back({entry.path(),{}});
     }
+    known_entries_=entries.size();
     if (entries.size()<=4096)return;
     for(auto& entry:entries)entry.time=std::filesystem::last_write_time(entry.path);
     std::sort(entries.begin(),entries.end(),[](const auto& a,const auto& b){return a.time<b.time;});
-    for(std::size_t i=0;i<entries.size()-4096;++i){std::error_code error;std::filesystem::remove(entries[i].path,error);}
+    for(std::size_t i=0;i<entries.size()-4096;++i){std::error_code error;if(std::filesystem::remove(entries[i].path,error))--known_entries_;}
 }
 }

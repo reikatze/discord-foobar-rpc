@@ -10,6 +10,19 @@ struct LogHarness {
     bool contains(const std::string& text)const{for(const auto& line:lines)if(line.find(text)!=std::string::npos)return true;return false;}
 };
 int main(){Suite s;
+ s.test("album ambiguity logs conflicting names and IDs without verbose logging",[]{
+    TemporaryDirectory dir;MetadataCache cache(dir.path);LogHarness h;Track t;apply_filename_fallback(t,"Artist - Song (Official Video).webm");
+    const std::string first="11111111-1111-4111-8111-111111111111",second="22222222-2222-4222-8222-222222222222";
+    MonoClock::time_point now{};
+    MusicBrainz mb(cache,[&](const std::string& url,const Cancelled&){
+        require(url.find("recording/?query=")!=std::string::npos,"Ambiguous albums triggered artwork lookup");json rows=json::array();
+        if(url.find("recording%3A%22Song%22")!=std::string::npos)for(bool other:{false,true})rows.push_back({{"id",other?second:first},{"score",100},{"title","Song"},{"artist-credit",json::array({{{"name","Artist"}}})},
+            {"releases",json::array({{{"id",other?second:first},{"title",other?"Second album":"First album"},{"status","Official"},{"release-group",{{"id",other?second:first},{"primary-type","Album"}}}}})}});
+        return HttpResponse{200,json{{"recordings",rows}}.dump(),""};
+    },{[&]{return now;},[&](auto target,const Cancelled&){now=target;}},h.log);
+    require(mb.lookup(t,[]{return false;}).artwork_url.empty(),"Conflicting album chosen");h.flush();
+    require(h.contains("First album")&&h.contains("Second album")&&h.contains(first)&&h.contains(second),"Album conflict explanation missing");
+ });
  s.test("normal logs are queued and verbose detail is opt-in",[]{LogHarness h;h.log.detail("lookup #1","secret detail");require(h.tasks.empty(),"Disabled verbose queued work");h.log.info("lookup #1","Lookup failed: HTTP 503");require(h.lines.empty()&&h.tasks.size()==1,"Worker printed synchronously");h.flush();require(h.contains("HTTP 503")&&!h.contains("secret detail"),"Normal logging lost failure or leaked verbose");auto copy=h.log;copy.set_verbose(true);h.log.detail("lookup #1","request URL");h.flush();require(h.contains("request URL"),"Runtime toggle not shared");});
  s.test("turning verbose off removes queued verbose details",[]{LogHarness h;h.log.set_verbose(true);h.log.detail("lookup","candidate");h.log.info("lookup","summary");h.log.set_verbose(false);h.flush();require(!h.contains("candidate")&&h.contains("summary"),"Queued detail printed after opt-out");});
  s.test("repeat suppression is bounded in time and keeps track scopes separate",[]{LogHarness h;h.log.info("lookup #1","failure");h.log.info("lookup #1","failure");h.log.info("lookup #2","failure");h.flush();require(h.lines.size()==2,"Duplicate logged or another track hidden");h.now+=std::chrono::seconds(31);h.log.info("lookup #1","failure");h.flush();require(h.lines.size()==3,"Repeat never became visible again");});

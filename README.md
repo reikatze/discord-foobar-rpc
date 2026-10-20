@@ -117,27 +117,29 @@ If that location is unavailable or unwritable, the addon tries:
 
 If neither location works, playback and presence continue without persistent caching. The addon never writes inside a signed macOS application or component bundle.
 
-Cache records contain metadata and artwork URLs, not downloaded images. Complete positive results last 60 days. Unmatched results retry after one hour, partial results after ten minutes, and transient artwork failures after one minute. Album-art URLs are shared by release or release group; missing artwork retries after one hour. The disk cache is bounded to 4,096 records, and corrupt, expired, or mismatched records are ignored.
+Cache records contain metadata and artwork URLs, not downloaded images. Complete positive results last 60 days. Unmatched results retry after one hour, partial results after ten minutes, and transient artwork failures after one minute without caching failed song lookups. Verified song text remains visible while artwork is retried. Album-art URLs are shared by release or release group; missing artwork retries after one hour. The disk cache is bounded to 4,096 records, and corrupt, expired, or mismatched records are ignored.
 
 Release details, release-group details, and album searches also share a bounded memory cache: up to 64 entries, at most 256 KiB each. Positive entries expire after 24 hours; empty album searches after one hour. Complete local fields use smaller release summaries, with track details requested when missing fields need them.
 
 Stopping or disabling presence sends a clear before processing pending Discord replies, then closes the IPC session. The addon stays disconnected while inactive. Routine hover-clock changes share the 30-second presence refresh, while changes to the song, playback state, or artwork are coalesced separately.
 
-For filename matches, several recordings can agree on one studio album even when live or compilation versions exist. Sparse release summaries are enriched with at most six release-detail lookups per search. Different studio albums or conflicting song/artist pairs remain unresolved. Component status distinguishes a missing album match, missing hosted artwork, and a failed network request.
+For filename matches, several recordings can agree on one studio album even when live or compilation versions exist. Sparse release summaries are enriched with at most six distinct release-detail lookups per lookup; repeated editions do not consume additional budget. Different studio albums or conflicting song/artist pairs remain unresolved. Component status distinguishes a missing album match, missing hosted artwork, and a failed network request.
 
-MusicBrainz requests are serialized at least 1.1 seconds apart and respect rate-limit backoff. Requests have deadlines, size limits, HTTPS-only redirects, and cancellation checks. Metadata lookup and Discord communication run on separate workers. Cache maintenance is batched per lookup, and metadata refresh follows the cached result's expiry instead of rereading it every minute.
+MusicBrainz requests are serialized at least 1.1 seconds apart and respect rate-limit backoff. Requests have deadlines, size limits, HTTPS-only redirects, and cancellation checks. Metadata lookup and Discord communication run on separate workers. HTTP requests reuse one worker-owned curl handle and its connection caches. Cache maintenance is batched per lookup and scans are deferred for up to five minutes or 128 writes, with earlier trimming when needed to enforce the record limit. Metadata refresh follows the cached result's expiry instead of rereading it every minute. The presence worker sleeps until a state change while stopped or disabled; paused playback uses a slower IPC polling interval.
 
-Discord connection checks reuse encoded presence data. Playing hover text is formatted once per second while IPC health checks continue every 200 ms. Presence changes are coalesced, and stopping or disabling clears activity on the worker's next wake. Network failures preserve basic presence from local tags.
+Discord connection checks reuse encoded presence data. Playing hover text is formatted once per second while IPC health checks continue every 200 ms. Presence changes are coalesced, and stopping or disabling clears activity on the worker's next wake. Network failures preserve local tags and any song text already verified during the lookup.
 
 Artwork comes directly from Cover Art Archive's hosted front-cover URLs. There is no third-party image-fitting proxy; Discord may crop an image to its card layout.
 
-To test matching from scratch, close foobar2000 and remove only the addon's `metadata-cache` directory before reopening it.
+Use **Retry current track** to refresh one track without deleting the cache. To reset all matching results, close foobar2000 and remove only the addon's `metadata-cache` directory before reopening it.
 
 ## Console diagnostics
 
 Open Preferences → Tools → discord-foobar-rpc and enable **Verbose diagnostic logging (foobar console)**, then Apply. The setting defaults to off, persists in the foobar profile, and can be changed during playback without restarting metadata lookup. Defaults restores normal logging.
 
-Normal console messages include lookup failures, rejected-candidate counts, selected albums and identifiers, artwork outcomes, Discord connection changes, and Discord error codes/messages. Verbose mode additionally includes candidate rejection reasons, request URLs and HTTP statuses, cache hits, selected artwork URLs, sent activity details, and Discord acknowledgments. Messages use a component prefix and track/lookup context. Cancelled lookups are verbose events, not failures.
+Use **Retry current track** in the component preferences to retry the currently playing or paused track without clearing its existing presence. This bypasses the track metadata cache and cached missing-cover results, retains positive cover URLs, and preserves MusicBrainz rate-limit backoff. Enable the component and start playback before retrying.
+
+Normal console messages include lookup failures, rejected-candidate counts, selected albums and identifiers, conflicting studio-album names and IDs, artwork outcomes, Discord connection changes, and Discord error codes/messages. Verbose mode additionally includes candidate rejection reasons, request URLs and HTTP statuses, cache hits and remaining metadata-cache lifetime, cached negative artwork, incomplete release details and exhausted detail budgets, selected artwork URLs, sent activity details, and Discord acknowledgments. Messages use a component prefix and track/lookup context. Cancelled lookups are verbose events, not failures.
 
 Worker threads enqueue messages for a bounded main-thread console batch. Repeated identical messages are suppressed for 30 seconds; a full queue reports omitted messages. No log files are written. A successful Discord acknowledgment means the command was accepted, not that the artwork rendered on screen.
 

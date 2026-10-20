@@ -14,6 +14,7 @@ public:
         COMMAND_HANDLER_EX(IDC_ENABLED,BN_CLICKED,on_change)
         COMMAND_HANDLER_EX(IDC_VERBOSE_LOGGING,BN_CLICKED,on_change)
         COMMAND_HANDLER_EX(IDC_APPLICATION_ID,EN_CHANGE,on_change)
+        COMMAND_HANDLER_EX(IDC_RETRY_CURRENT_TRACK,BN_CLICKED,on_retry)
     END_MSG_MAP()
     t_uint32 get_state() override {
         t_uint32 state=preferences_state::resettable | preferences_state::dark_mode_supported;
@@ -39,6 +40,10 @@ private:
         load(music_tracker::read_settings());uSetDlgItemText(m_hWnd,IDC_STATUS,music_tracker::component_status().c_str());return TRUE;
     }
     void on_change(UINT,int,CWindow){callback_->on_state_changed();}
+    void on_retry(UINT,int,CWindow) {
+        const bool requested=music_tracker::retry_current_track();
+        uSetDlgItemText(m_hWnd,IDC_STATUS,requested?music_tracker::component_status().c_str():"Play a track and enable Discord Rich Presence before retrying.");
+    }
     void load(const music_tracker::Settings& s) {
         CheckDlgButton(IDC_ENABLED,s.enabled?BST_CHECKED:BST_UNCHECKED);CheckDlgButton(IDC_VERBOSE_LOGGING,s.verbose_logging?BST_CHECKED:BST_UNCHECKED);uSetDlgItemText(m_hWnd,IDC_APPLICATION_ID,s.custom_application_id.c_str());
     }

@@ -4,13 +4,18 @@
 #include "diagnostics.h"
 #include <unordered_map>
 namespace music_tracker {
+struct LookupFailure : std::runtime_error {
+    Metadata metadata;
+    std::int64_t retry_at;
+    LookupFailure(Metadata value,const std::string& message,std::int64_t retry):std::runtime_error(message),metadata(std::move(value)),retry_at(retry){}
+};
 class MusicBrainz {
 public:
     using Request = std::function<HttpResponse(const std::string&,const Cancelled&)>;
     struct Timing {std::function<MonoClock::time_point()> now;std::function<void(MonoClock::time_point,const Cancelled&)> wait;};
     explicit MusicBrainz(MetadataCache& cache,Request requester={},Timing timing={},Diagnostics diagnostics={}):cache_(cache),requester_(std::move(requester)),timing_(std::move(timing)),diagnostics_(std::move(diagnostics)){}
     Metadata lookup(const Track& track,const Cancelled& cancelled);
-    LookupResult lookup_result(const Track& track,const Cancelled& cancelled);
+    LookupResult lookup_result(const Track& track,const Cancelled& cancelled,bool refresh=false);
 private:
     MetadataCache& cache_;
     HttpClient http_;
@@ -19,6 +24,7 @@ private:
     Diagnostics diagnostics_;
     std::string log_scope_;
     std::uint64_t lookup_sequence_=0;
+    bool refresh_artwork_=false;
     MonoClock::time_point now() const {return timing_.now?timing_.now():MonoClock::now();}
     HttpResponse get(const std::string& url,const Cancelled& cancelled);
     MonoClock::time_point next_request_{};

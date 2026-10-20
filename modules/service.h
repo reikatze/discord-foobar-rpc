@@ -19,6 +19,7 @@ public:
     ~Service();
     void publish(Playback snapshot); // Main thread copies values; no foobar objects escape into workers.
     void configure(Settings settings);
+    bool retry_current_track(); // Cancels stale work without dropping current presence.
     void stop() noexcept;
     std::string status() const;
 private:
@@ -36,6 +37,7 @@ private:
     std::atomic<bool> stopping_{false};
     std::atomic<std::uint64_t> generation_{0};
     std::uint64_t presence_revision_=0;
+    bool retry_requested_=false;
     std::thread presence_thread_,lookup_thread_;
 };
 std::string effective_application_id(const Settings& settings);

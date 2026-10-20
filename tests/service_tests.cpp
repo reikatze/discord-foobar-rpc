@@ -1,7 +1,46 @@
 #include "test_support.h"
 #include "../modules/service.h"
+#include "../modules/musicbrainz.h"
 Playback song(const std::string& name){Playback p;p.active=true;p.track.identity=name;p.track.title=name;p.track.artist="Artist";p.track.duration=180;p.epoch=epoch_now();return p;}
 int main(){Suite s;
+ s.test("transient retry failure preserves an already complete presence",[]{
+    auto w=std::make_shared<MockWire>();w->auto_ready=true;std::atomic<unsigned> calls=0;
+    ServiceDependencies d;d.dial=mock_dial(w);d.lookup=[&](const Track&,const Cancelled&)->LookupResult{
+        Metadata m;m.title="Verified song";m.artist="Artist";m.artwork_url="https://archive.org/keep.jpg";m.complete=true;
+        if(++calls>1)throw LookupFailure({},"Offline",unix_now()+3600);
+        return m;
+    };
+    Service service({}, {true,"123456789012345678"},d);service.publish(song("Song"));
+    eventually([&]{auto a=w->activities();return !a.empty()&&a.back().is_object()&&a.back()["assets"].value("large_image",std::string{})=="https://archive.org/keep.jpg";});
+    require(service.retry_current_track(),"Retry rejected");eventually([&]{return calls.load()==2&&service.status().find("will retry")!=std::string::npos;});
+    auto a=w->activities();require(a.back()["assets"]["large_image"]=="https://archive.org/keep.jpg","Transient failure discarded a good cover");
+ });
+ s.test("manual retry refreshes current playback and retains useful presence",[]{
+    auto w=std::make_shared<MockWire>();w->auto_ready=true;std::atomic<unsigned> calls=0;
+    ServiceDependencies d;d.dial=mock_dial(w);d.lookup=[&](const Track&,const Cancelled&){
+        Metadata m;m.title="Recovered song";m.artist="Recovered artist";
+        if(++calls==1)throw LookupFailure(m,"Album lookup offline",unix_now()+3600);
+        m.artwork_url="https://archive.org/recovered.jpg";m.complete=true;return LookupResult{m,unix_now()+3600};
+    };
+    Service service({}, {true,"123456789012345678"},d);require(!service.retry_current_track(),"Stopped playback accepted retry");
+    auto p=song("file");p.track.title.clear();p.track.artist.clear();p.track.fallback_title="Filename";p.paused=true;service.publish(p);
+    eventually([&]{return service.status().find("Song identified; artwork lookup unavailable")!=std::string::npos;});
+    eventually([&]{auto a=w->activities();return !a.empty()&&a.back().is_object()&&a.back()["details"]=="Recovered song";});
+    require(service.retry_current_track(),"Active paused track rejected retry");
+    eventually([&]{return calls.load()==2&&service.status().find("artwork ready")!=std::string::npos;});
+    eventually([&]{auto a=w->activities();return !a.empty()&&a.back().is_object()&&a.back()["assets"].value("large_image",std::string{})=="https://archive.org/recovered.jpg";});
+    service.configure({false,"123456789012345678"});require(!service.retry_current_track(),"Disabled component accepted retry");
+ });
+ s.test("manual retry cancels in-flight work without accepting stale metadata",[]{
+    auto w=std::make_shared<MockWire>();w->auto_ready=true;std::atomic<unsigned> calls=0;std::atomic<bool> cancelled=false;
+    ServiceDependencies d;d.dial=mock_dial(w);d.lookup=[&](const Track&,const Cancelled& cancel)->LookupResult{
+        if(++calls==1){while(!cancel())std::this_thread::sleep_for(std::chrono::milliseconds(2));cancelled=true;Metadata stale;stale.title="Stale";return stale;}
+        Metadata m;m.title="Current";m.artist="Artist";return m;
+    };
+    Service service({}, {true,"123456789012345678"},d);service.publish(song("Song"));eventually([&]{return calls.load()==1;});
+    require(service.retry_current_track(),"Retry rejected");eventually([&]{return calls.load()==2&&cancelled.load();});
+    for(const auto& activity:w->activities())if(activity.is_object())require(activity.value("details",std::string{})!="Stale","Stale retry result published");
+ });
  s.test("verbose preference updates diagnostics without restarting lookup",[]{
     auto w=std::make_shared<MockWire>();w->auto_ready=true;std::atomic<unsigned> calls=0;Diagnostics log;
     ServiceDependencies d;d.diagnostics=log;d.dial=mock_dial(w);d.lookup=[&](const Track&,const Cancelled&){++calls;return Metadata{};};
