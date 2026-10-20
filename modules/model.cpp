@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iomanip>
 #include <limits>
+#include <regex>
 #include <sstream>
 #include <tuple>
 namespace music_tracker {
@@ -56,51 +57,91 @@ void apply_filename_fallback(Track& t,const std::string& filename) {
     auto dot=stem.find_last_of('.');
     if(dot!=std::string::npos) {
         const auto extension=normalized(stem.substr(dot));
-        for(const char* known:{".webm",".mkv",".mp4",".mp3",".flac",".ogg",".opus",".wav",".m4a",".aac",".wma",".aiff",".aif",".mov",".avi",".m4v"})
+        for(const char* known:{".webm",".mkv",".mp4",".mp3",".flac",".ogg",".opus",".wav",".m4a",".aac",".wma",".aiff",".aif",".mov",".avi",".m4v",".alac",".ape",".wv",".mka",".aifc",".dsf",".dff",".m4b",".mp2",".oga"})
             if(extension==known){stem.resize(dot);break;}
     }
-    t.fallback_title=stem;t.fallback_artist.clear();
-    auto clean=stem;
-    // Strip only the conventional trailing 11-character video ID.
-    if(clean.size()>=14&&clean.ends_with("]")&&clean[clean.size()-14]==' '&&clean[clean.size()-13]=='[') {
-        auto id=clean.substr(clean.size()-12,11);
-        if(std::all_of(id.begin(),id.end(),[](unsigned char c){return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-';}))
-            clean=trim(clean.substr(0,clean.size()-14));
+    t.fallback_title=stem;t.fallback_artist.clear();t.filename_has_video_hint=false;
+    const auto original_stem=stem;
+    // Strip explicit track/disc prefixes, keeping names such as 1979 and 311 intact.
+    static const std::regex prefixes[]{
+        std::regex(R"(^(?:(?:CD|Disc) ?)?[1-9][0-9]?[-.][0-9]{2,3}[ ._-]+(.+)$)",std::regex::icase),
+        std::regex(R"(^\[[0-9]{1,3}\][ ._-]+(.+)$)"),
+        std::regex(R"(^[0-9]{1,3}[.)][ 	]+(.+)$)"),
+        std::regex(R"(^0[0-9]{1,2}(?:[ 	]+-[ 	]+|[ 	]+)(.+)$)")
+    };
+    for(const auto& prefix:prefixes) {
+        std::smatch match;
+        if(std::regex_match(stem,match,prefix)){stem=trim(match[1].str());break;}
     }
-    for(bool changed=true;changed;) {
-        changed=false;
-        for(const char* suffix:{" (official video)"," (official music video)"," (official audio)"," (lyric video)"," (lyrics)"," [official video]"," [official music video]"," [official audio]"}) {
-            const std::string ending=suffix;
-            if(normalized(clean).ends_with(ending)) {clean=trim(clean.substr(0,clean.size()-ending.size()));changed=true;break;}
+    bool video_hint=false;
+    auto clean_part=[&](std::string value) {
+        // Decorations belong to either side of Artist - Song / Song - Artist.
+        for(bool changed=true;changed;) {
+            changed=false;
+            if(value.size()>=14&&value.ends_with("]")&&value[value.size()-14]==' '&&value[value.size()-13]=='[') {
+                const auto id=value.substr(value.size()-12,11);
+                if(std::all_of(id.begin(),id.end(),[](unsigned char c){return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-';})) {
+                    value=trim(value.substr(0,value.size()-14));video_hint=true;changed=true;continue;
+                }
+            }
+            auto lower=value;
+            std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){return static_cast<char>(c<128?std::tolower(c):c);});
+            for(const char* suffix:{" (official video)"," (official music video)"," (official audio)"," (official lyric video)"," (lyric video)"," (lyrics)"," [official video]"," [official music video]"," [official audio]"," [official lyric video]"," [lyric video]"," [lyrics]"}) {
+                const std::string ending=suffix;
+                if(lower.ends_with(ending)) {value=trim(value.substr(0,value.size()-ending.size()));video_hint=true;changed=true;break;}
+            }
+            if(changed)continue;
+            for(const char* suffix:{" [hd]"," [hq]"," [4k]"," [1080p]"," [720p]"," [320kbps]"," [flac]"}) {
+                const std::string ending=suffix;
+                if(lower.ends_with(ending)) {value=trim(value.substr(0,value.size()-ending.size()));changed=true;break;}
+            }
         }
+        return value;
+    };
+    // Require a delimited separator; bare hyphens and underscores belong to names.
+    std::size_t separator=std::string::npos,width=0;
+    for(const std::string delimiter:{" - "," \xE2\x80\x93 "," \xE2\x80\x94 ","_-_"}) {
+        auto found=stem.find(delimiter);
+        if(found<separator){separator=found;width=delimiter.size();}
     }
-    const auto separator=clean.find(" - ");
-    if(separator==std::string::npos)return;
-    auto artist=trim(clean.substr(0,separator)),title=trim(clean.substr(separator+3));
-    if(artist.empty()||title.empty())return;
-    // Some containers store the download filename as TITLE. Only demote that
-    // exact placeholder when no artist tag exists; actual tags keep precedence.
+    // Some containers store the download filename as TITLE. Real tags stay authoritative.
     const bool placeholder=t.artist.empty()&&!t.title.empty()&&
-        (normalized(t.title)==normalized(filename)||normalized(t.title)==normalized(stem));
-    if(!t.title.empty()&&!placeholder&&normalized(t.title)!=normalized(title))return;
-    if(!t.artist.empty()&&normalized(t.artist)!=normalized(artist))return;
+        (normalized(t.title)==normalized(filename)||normalized(t.title)==normalized(original_stem));
+    if(separator==std::string::npos) {
+        const auto title=clean_part(trim(stem));
+        if(title.empty()||(!t.title.empty()&&!placeholder&&normalized(t.title)!=normalized(title)))return;
+        if(placeholder)t.title.clear();
+        t.fallback_title=title;t.filename_has_video_hint=video_hint;return;
+    }
+    auto artist=clean_part(trim(stem.substr(0,separator))),title=clean_part(trim(stem.substr(separator+width)));
+    if(artist.empty()||title.empty())return;
+    auto compatible=[&](const std::string& candidate_artist,const std::string& candidate_title) {
+        return (t.title.empty()||placeholder||normalized(t.title)==normalized(candidate_title))&&
+            (t.artist.empty()||normalized(t.artist)==normalized(candidate_artist));
+    };
+    if(!compatible(artist,title)) {
+        if(!compatible(title,artist))return;
+        std::swap(artist,title);
+    }
     if(placeholder)t.title.clear();
-    t.fallback_title=title;t.fallback_artist=artist;
+    t.fallback_title=title;t.fallback_artist=artist;t.filename_has_video_hint=video_hint;
 }
 std::string lookup_key(const Track& t) {
     // Full canonical key is retained in cache records to detect any filename hash collision.
-    // Recheck filename results cached before both orders were verified.
-    const auto version=t.title.empty()&&t.artist.empty()&&!t.fallback_title.empty()&&
-        !t.fallback_artist.empty()?"v3-filename-orders":"v2";
-    return json::array({version, normalized(t.recording_id), normalized(t.release_id), normalized(t.release_group_id),
+    // Recheck filename results cached before per-side cleanup and video album matching.
+    const bool filename=t.title.empty()&&t.artist.empty()&&!t.fallback_title.empty()&&!t.fallback_artist.empty();
+    const auto version=filename?"v4-video-album":"v2";
+    auto key=json::array({version, normalized(t.recording_id), normalized(t.release_id), normalized(t.release_group_id),
         normalized(t.title), normalized(t.artist), normalized(t.album), normalized(t.album_artist),
         t.track_number, t.disc_number, std::isfinite(t.duration) && t.duration > 0 ? static_cast<long long>(t.duration) : 0,
-        t.title.empty() ? normalized(t.fallback_title) : "",t.artist.empty()?normalized(t.fallback_artist):""}).dump();
+        t.title.empty() ? normalized(t.fallback_title) : "",t.artist.empty()?normalized(t.fallback_artist):""});
+    if(filename)key.push_back(t.filename_has_video_hint);
+    return key.dump();
 }
 LookupResult::LookupResult(Metadata value,std::int64_t expiry):metadata(std::move(value)),expires(expiry?expiry:unix_now()+60LL*86400) {}
 bool same_lookup_inputs(const Track& a,const Track& b) {
-    return std::tie(a.recording_id,a.release_id,a.release_group_id,a.title,a.artist,a.album,a.album_artist,a.track_number,a.disc_number,a.duration,a.fallback_title,a.fallback_artist)==
-        std::tie(b.recording_id,b.release_id,b.release_group_id,b.title,b.artist,b.album,b.album_artist,b.track_number,b.disc_number,b.duration,b.fallback_title,b.fallback_artist);
+    return std::tie(a.recording_id,a.release_id,a.release_group_id,a.title,a.artist,a.album,a.album_artist,a.track_number,a.disc_number,a.duration,a.fallback_title,a.fallback_artist,a.filename_has_video_hint)==
+        std::tie(b.recording_id,b.release_id,b.release_group_id,b.title,b.artist,b.album,b.album_artist,b.track_number,b.disc_number,b.duration,b.fallback_title,b.fallback_artist,b.filename_has_video_hint);
 }
 Track merge_dynamic_track(const Track& previous,Track incoming) {
     const bool same_file=incoming.identity==previous.identity;

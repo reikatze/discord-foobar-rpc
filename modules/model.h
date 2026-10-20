@@ -16,6 +16,7 @@ struct Track {
     std::string recording_id, release_id, release_group_id;
     unsigned track_number = 0, disc_number = 0;
     double duration = 0;
+    bool filename_has_video_hint = false; // Video edits need not have the album recording length.
     std::string cache_key; // Computed once by Service when lookup inputs change.
 };
 struct Playback {

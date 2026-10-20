@@ -82,6 +82,24 @@ Each track goes through the MusicBrainz lookup pipeline, including tracks with c
 
 Dynamic stream song changes discard inherited song IDs, album context, and duration before matching the new song. Slow results from an earlier song cannot replace the current song's metadata.
 
+### Filename patterns
+
+When tags are missing, filename hints support the following patterns:
+
+| Pattern | Example |
+|---|---|
+| Artist and song, either order | `Artist - Song.flac`, `Song - Artist.mp3` |
+| Track prefixes | `01 - Artist - Song.flac`, `01. Artist - Song.mp3`, `01 Artist - Song.m4a`, `[01] Artist - Song.wav` |
+| Disc and track prefixes | `1-02 Artist - Song.flac`, `1.02 Artist - Song.flac`, `CD1-02 Artist - Song.flac`, `Disc 2-03 - Artist - Song.flac` |
+| Title only with a track prefix | `01 - Song.flac`, `[02] Song.ogg` |
+| Alternative separators | `Artist – Song.flac`, `Artist — Song.flac`, `Artist_-_Song.flac` |
+| Download decorations on either side | `Song (Official Video) [TAqZb52sgpU] - Artist.webm` |
+| Quality labels | `Artist - Song [HD].mp3`, `Artist - Song [320kbps].mp3`, `Artist - Song [FLAC].flac` |
+
+Official video/audio/lyric labels, conventional video IDs, and recognized bracketed quality labels are removed from search hints. Live, remix, acoustic, remaster, featured-artist and other version information is preserved. Bare hyphens and ordinary underscores remain part of names. Numeric artists such as `311` and titles such as `1979` are preserved.
+
+Real tags take precedence and can establish which side is the artist. Otherwise both orders are checked against MusicBrainz. Track/disc prefixes are hints only; they do not create tags or identify an album. Title-only files need additional evidence such as duration to recover an artist. Ambiguous matches can remain unresolved, and artwork depends on available metadata and cover art.
+
 ## Cache, requests, and artwork
 
 The cache follows foobar2000's actual profile, including portable profiles:

@@ -1,6 +1,8 @@
 #include "musicbrainz.h"
 #include <algorithm>
 #include <cmath>
+#include <map>
+#include <set>
 #include <thread>
 namespace music_tracker {
 namespace {
@@ -55,6 +57,33 @@ const json* pick_recording(const json& rows,const Track& t) {
     }
     if(second>=0 && best_score-second<3)return nullptr;
     return best;
+}
+// Recording identity may be ambiguous while album artwork is unambiguous.
+// Require every candidate to agree on both names and exactly one studio album.
+std::string shared_studio_album(const std::vector<json>& rows) {
+    std::set<std::string> common;
+    bool first=true;
+    for(const auto& row:rows) {
+        if(!equal_name(row.value("title",std::string{}),rows.front().value("title",std::string{}))||
+           !equal_name(credited(row),credited(rows.front())))return {};
+        std::set<std::string> albums;
+        if(row.contains("releases")&&row["releases"].is_array())for(const auto& release:row["releases"]) {
+            if(!release.is_object()||normalized(release.value("status",std::string{}))!="official"||
+               !release.contains("release-group")||!release["release-group"].is_object())continue;
+            const auto& group=release["release-group"];
+            if(normalized(group.value("primary-type",group.value("type",std::string{})))!="album")continue;
+            if(group.contains("secondary-types")&&(!group["secondary-types"].is_array()||!group["secondary-types"].empty()))continue;
+            if(auto id=id_of(group);!id.empty())albums.insert(id);
+        }
+        if(first){common=std::move(albums);first=false;}
+        else {
+            std::set<std::string> intersection;
+            std::set_intersection(common.begin(),common.end(),albums.begin(),albums.end(),std::inserter(intersection,intersection.end()));
+            common=std::move(intersection);
+        }
+        if(common.empty())return {};
+    }
+    return common.size()==1?*common.begin():std::string{};
 }
 void find_release_track(const json& release,const Track& t,Metadata& result) {
     if(!release.contains("media")||!release["media"].is_array())return;
@@ -261,7 +290,7 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
             searches.push_back(search);
         }
         json verified=nullptr;
-        bool ambiguous=false;
+        std::map<std::string,json> exact, duration_matches;
         for(const auto& interpretation:searches) {
             std::string query="recording:"+literal(interpretation.title);
             if(!interpretation.artist.empty())query+=" AND artist:"+literal(interpretation.artist);
@@ -272,22 +301,47 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
                 if(auto match=pick_recording(data["recordings"],interpretation))verified=*match;
                 continue;
             }
-            // Evaluate every candidate across both orders before accepting one.
-            // Search ranking alone cannot decide which side of a filename is the artist.
+            // Compare exact names first; duration is evidence, not a video-edit veto.
             for(const auto& row:data["recordings"]) {
-                if(std::isfinite(t.duration)&&t.duration>0) {
-                    if(!row.is_object()||!row.contains("length")||!row["length"].is_number())continue;
-                    const auto seconds=row["length"].get<double>()/1000.0;
-                    if(!std::isfinite(seconds)||std::abs(seconds-t.duration)>5)continue;
-                }
+                auto names=interpretation;names.duration=0;
                 auto single=json::array({row});
-                if(!pick_recording(single,interpretation))continue;
-                if(verified.is_null())verified=row;
-                else if(!equal_name(id_of(verified),id_of(row)))ambiguous=true;
+                if(!pick_recording(single,names))continue;
+                const auto id=id_of(row);
+                exact.emplace(id,row);
+                if(!std::isfinite(t.duration)||t.duration<=0)duration_matches.emplace(id,row);
+                else if(row.contains("length")&&row["length"].is_number()) {
+                    const auto seconds=row["length"].get<double>()/1000.0;
+                    if(std::isfinite(seconds)&&std::abs(seconds-t.duration)<=5)duration_matches.emplace(id,row);
+                }
             }
         }
-        if(!ambiguous&&!verified.is_null()) {
+        if(filename_orders) {
+            const auto& pool=duration_matches.empty()&&t.filename_has_video_hint?exact:duration_matches;
+            if(pool.size()==1)verified=pool.begin()->second;
+            else if(!pool.empty()) {
+                std::vector<json> candidates;for(const auto& entry:pool)candidates.push_back(entry.second);
+                const auto album_id=shared_studio_album(candidates);
+                if(!album_id.empty()) {
+                    result.title=candidates.front().value("title",std::string{});
+                    result.artist=credited(candidates.front());
+                    result.release_group_id=album_id;
+                    // No recording ID or remote duration is invented for agreeing editions.
+                }
+            }
+        }
+        if(!verified.is_null()) {
             recording=verified;recording_metadata(recording,result);
+            if(filename_orders&&t.album.empty()&&result.release_group_id.empty()) {
+                const auto studio=shared_studio_album({recording});
+                if(!studio.empty()) {
+                    result.release_group_id=studio;
+                    json editions=json::array();
+                    for(const auto& edition:recording["releases"])
+                        if(edition.is_object()&&edition.contains("release-group")&&id_of(edition["release-group"])==studio)
+                            editions.push_back(edition);
+                    recording["releases"]=std::move(editions);
+                }
+            }
         }
     }
     // Resolve releases belonging to the verified recording, preferring a tagged album.
