@@ -1,0 +1,5 @@
+#pragma once
+#define IDD_MUSIC_PREFERENCES 101
+#define IDC_ENABLED 1001
+#define IDC_APPLICATION_ID 1002
+#define IDC_STATUS 1003

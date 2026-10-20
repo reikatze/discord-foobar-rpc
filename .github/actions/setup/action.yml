@@ -1,0 +1,58 @@
+name: Prepare music tracker dependencies
+description: Locate Source and provision pinned dependencies for native builds or tests
+inputs:
+  arch:
+    description: Native architecture
+    required: true
+  native-build:
+    description: Provision the foobar SDK and native build dependencies
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - name: Locate Source and dependency pin
+      id: source
+      shell: python
+      run: |
+        import json, os
+        from pathlib import Path
+        root = Path.cwd()
+        matches = [p for p in [root, root / 'Source', root / 'discord-foobar-rpc' / 'Source', root / 'Discord Music Tracker' / 'Source'] if (p / 'tools/prepare.py').is_file() and (p / 'main.cpp').is_file()]
+        if len(matches) != 1:
+            raise RuntimeError('Expected one Source root')
+        source = matches[0]
+        with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as output:
+            output.write('DMT_SOURCE=' + str(source) + '\n')
+            output.write('VCPKG_BINARY_SOURCES=clear;files,' + str(root / '.ci/vcpkg-cache') + ',readwrite\n')
+        with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+            output.write('vcpkg_commit=' + json.loads((source / 'tools/dependencies.json').read_text())['vcpkg_commit'] + '\n')
+    - uses: actions/checkout@v4
+      with:
+        repository: microsoft/vcpkg
+        ref: ${{ steps.source.outputs.vcpkg_commit }}
+        path: .ci/vcpkg
+        persist-credentials: false
+    - uses: actions/cache@v4
+      with:
+        path: |
+          .ci/vcpkg-cache
+          .ci/vcpkg/downloads
+        key: dependencies-v1-${{ runner.os }}-${{ inputs.arch }}-${{ hashFiles('**/tools/dependencies.json', '**/tools/triplets/*.cmake') }}
+    - name: Provision dependencies
+      shell: python
+      env:
+        DMT_ARCH: ${{ inputs.arch }}
+        DMT_NATIVE_BUILD: ${{ inputs.native-build }}
+      run: |
+        import os, subprocess, sys
+        from pathlib import Path
+        packages = ['PyYAML==6.0.3']
+        native = os.environ['DMT_NATIVE_BUILD'] == 'true'
+        if native:
+            packages.append('py7zr==1.0.0')
+        subprocess.run([sys.executable, '-m', 'pip', 'install', *packages], check=True)
+        source = Path(os.environ['DMT_SOURCE'])
+        command = [sys.executable, str(source / 'tools/prepare.py'), '--source', str(source), '--vcpkg', str(Path.cwd() / '.ci/vcpkg'), '--arch', os.environ['DMT_ARCH']]
+        if not native:
+            command.append('--tests-only')
+        subprocess.run(command, check=True)

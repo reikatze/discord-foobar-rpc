@@ -1,0 +1,45 @@
+name: Core memory and thread checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sanitizers:
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: ['address,undefined', 'thread']
+    defaults:
+      run:
+        shell: python
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          arch: x64
+          native-build: 'false'
+      - name: Run sanitizer suites
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          source = Path(os.environ['DMT_SOURCE'])
+          subprocess.run([sys.executable, str(source / 'tests/ci_contract_tests.py')], check=True)
+          subprocess.run([sys.executable, str(source / 'tools/run.py'), 'test', '--source', str(source), '--configuration', 'Debug', '--sanitizer', '${{ matrix.sanitizer }}'], check=True)
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          import os
+          from pathlib import Path
+          log = Path(os.environ.get('DMT_SOURCE', '.')) / 'out/tests/Testing/Temporary/LastTest.log'
+          if log.is_file():
+              print(log.read_text(encoding='utf-8', errors='replace'))

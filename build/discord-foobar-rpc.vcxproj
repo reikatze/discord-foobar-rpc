@@ -1,0 +1,109 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build" ToolsVersion="Current">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{B2D44604-ACA1-4496-8EF1-DBA6ECC82904}</ProjectGuid>
+    <RootNamespace>discord_foobar_rpc</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <SourceRoot Condition="'$(SourceRoot)'==''">$(MSBuildThisFileDirectory)..\</SourceRoot>
+    <FoobarSdkRoot Condition="'$(FoobarSdkRoot)'==''">$(SourceRoot)third_party\foobar-sdk</FoobarSdkRoot>
+    <JsonIncludeDir Condition="'$(JsonIncludeDir)'==''">$(SourceRoot)third_party\nlohmann\include</JsonIncludeDir>
+    <CurlRoot Condition="'$(CurlRoot)'==''">$(SourceRoot)third_party\curl</CurlRoot>
+    <TargetName>discord-foobar-rpc</TargetName>
+    <OutDir>$(SourceRoot)out\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SourceRoot)out\obj\$(Platform)\$(Configuration)\</IntDir>
+    <CurlLibraries Condition="'$(CurlLibraries)'==''">libcurl.lib;zlib.lib</CurlLibraries>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level4</WarningLevel>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <PreprocessorDefinitions>NOMINMAX;WIN32_LEAN_AND_MEAN;CURL_STATICLIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(FoobarSdkRoot);$(FoobarSdkRoot)\foobar2000;$(FoobarSdkRoot)\WTL;$(JsonIncludeDir);$(CurlRoot)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebugDLL</RuntimeLibrary>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <AdditionalLibraryDirectories>$(CurlRoot)\lib\$(Platform)\$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>$(FoobarSdkRoot)\foobar2000\shared\shared-$(Platform).lib;$(CurlLibraries);ws2_32.lib;crypt32.lib;secur32.lib;bcrypt.lib;iphlpapi.lib;wldap32.lib;normaliz.lib;advapi32.lib;shell32.lib;ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\main.cpp" />
+    <ClCompile Include="..\modules\cache.cpp" />
+    <ClCompile Include="..\modules\discord.cpp" />
+    <ClCompile Include="..\modules\foobar.cpp" />
+    <ClCompile Include="..\modules\http.cpp" />
+    <ClCompile Include="..\modules\model.cpp" />
+    <ClCompile Include="..\modules\musicbrainz.cpp" />
+    <ClCompile Include="..\modules\presence.cpp" />
+    <ClCompile Include="..\modules\service.cpp" />
+    <ClCompile Include="..\modules\settings.cpp" />
+    <ClCompile Include="..\platform\discord_windows.cpp" />
+    <ClCompile Include="..\platform\preferences_windows.cpp" />
+    <ClCompile Include="..\modules\settings_policy.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\modules\cache.h" />
+    <ClInclude Include="..\modules\discord.h" />
+    <ClInclude Include="..\modules\foobar.h" />
+    <ClInclude Include="..\modules\http.h" />
+    <ClInclude Include="..\modules\model.h" />
+    <ClInclude Include="..\modules\musicbrainz.h" />
+    <ClInclude Include="..\modules\presence.h" />
+    <ClInclude Include="..\modules\service.h" />
+    <ClInclude Include="..\modules\settings.h" />
+    <ClInclude Include="..\platform\resource.h" />
+    <ClInclude Include="..\modules\settings_policy.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="..\platform\preferences.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(FoobarSdkRoot)\libPPUI\libPPUI.vcxproj">
+      <Project>{7729eb82-4069-4414-964b-ad399091a03f}</Project>
+    </ProjectReference>
+    <ProjectReference Include="$(FoobarSdkRoot)\pfc\pfc.vcxproj">
+      <Project>{ebfffb4e-261d-44d3-b89c-957b31a0bf9c}</Project>
+    </ProjectReference>
+    <ProjectReference Include="$(FoobarSdkRoot)\foobar2000\foobar2000_component_client\foobar2000_component_client.vcxproj">
+      <Project>{71ad2674-065b-48f5-b8b0-e1f9d3892081}</Project>
+    </ProjectReference>
+    <ProjectReference Include="$(FoobarSdkRoot)\foobar2000\helpers\foobar2000_sdk_helpers.vcxproj">
+      <Project>{ee47764e-a202-4f85-a767-abdab4aff35f}</Project>
+    </ProjectReference>
+    <ProjectReference Include="$(FoobarSdkRoot)\foobar2000\SDK\foobar2000_SDK.vcxproj">
+      <Project>{e8091321-d79d-4575-86ef-064ea1a4a20d}</Project>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

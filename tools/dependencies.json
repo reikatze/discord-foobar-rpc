@@ -1,0 +1,8 @@
+{
+  "sdk": {
+    "version": "2026-10-01",
+    "url": "https://www.foobar2000.org/downloads/SDK-2026-10-01.7z",
+    "sha256": "d4c55077336fae81bf8df0259b5b2748fa45ea84132c656ead93eb123cbcdc26"
+  },
+  "vcpkg_commit": "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+}

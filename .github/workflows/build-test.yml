@@ -1,0 +1,87 @@
+name: Native addon tests and builds
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: discord-foobar-rpc-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    name: ${{ matrix.os }} / ${{ matrix.arch }} / ${{ matrix.configuration }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            arch: x86
+            configuration: Debug
+          - os: windows-2022
+            arch: x86
+            configuration: Release
+          - os: windows-2022
+            arch: x64
+            configuration: Debug
+          - os: windows-2022
+            arch: x64
+            configuration: Release
+          - os: macos-15-intel
+            arch: x64
+            configuration: Debug
+          - os: macos-15-intel
+            arch: x64
+            configuration: Release
+          - os: macos-15
+            arch: arm64
+            configuration: Debug
+          - os: macos-15
+            arch: arm64
+            configuration: Release
+    defaults:
+      run:
+        shell: python
+    env:
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.ci/vcpkg-cache,readwrite
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          arch: ${{ matrix.arch }}
+      - name: Run offline suites and native IPC tests
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          source = Path(os.environ['DMT_SOURCE'])
+          subprocess.run([sys.executable, str(source / 'tests/ci_contract_tests.py')], check=True)
+          subprocess.run([sys.executable, str(source / 'tools/run.py'), 'test', '--source', str(source), '--configuration', '${{ matrix.configuration }}'], check=True)
+      - name: Build, inspect and stage native addon
+        id: addon
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          source = Path(os.environ['DMT_SOURCE'])
+          subprocess.run([sys.executable, str(source / 'tools/run.py'), 'build', '--source', str(source), '--configuration', '${{ matrix.configuration }}'], check=True)
+      - name: Upload native addon
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.addon.outputs.artifact_name }}
+          path: ${{ steps.addon.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          import os
+          from pathlib import Path
+          source = Path(os.environ.get('DMT_SOURCE', '.'))
+          for name in ['out/tests/Testing/Temporary/LastTest.log', 'out/tests/Testing/Temporary/LastTestsFailed.log']:
+              file = source / name
+              if file.is_file():
+                  print(file.read_text(encoding='utf-8', errors='replace'))
