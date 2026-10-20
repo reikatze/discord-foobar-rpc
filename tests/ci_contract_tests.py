@@ -74,14 +74,28 @@ class CIContracts(unittest.TestCase):
             self.assertEqual(value,str(root/'include')+';../..;..')
 
     def test_static_curl_layout_normalizes_debug_and_release(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);installed=root/'installed';dest=root/'curl';(installed/'include/curl').mkdir(parents=True);(installed/'include/curl/curl.h').write_text('header')
-            for sub,curl,zlib in [('lib','libcurl.lib','zlib1.lib'),('debug/lib','libcurl-d.lib','zlibd1.lib')]:
-                folder=installed/sub;folder.mkdir(parents=True);(folder/curl).write_bytes(b'curl');(folder/zlib).write_bytes(b'zlib')
-            prepare.normalized_curl(installed,dest,'x64')
-            for config in ['Debug','Release']:
-                self.assertTrue((dest/'lib/x64'/config/'libcurl.lib').is_file())
-                self.assertTrue((dest/'lib/x64'/config/'zlib.lib').is_file())
+        for release,debug in [('zs.lib','zsd.lib'),('zlib1.lib','zlibd1.lib'),('zlib.lib','zlibd.lib')]:
+            with self.subTest(release=release),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);installed=root/'installed';dest=root/'curl'
+                (installed/'include/curl').mkdir(parents=True)
+                (installed/'include/curl/curl.h').write_text('header')
+                for sub,curl,zlib in [('lib','libcurl.lib',release),('debug/lib','libcurl-d.lib',debug)]:
+                    folder=installed/sub;folder.mkdir(parents=True)
+                    (folder/curl).write_bytes(b'curl');(folder/zlib).write_bytes(sub.encode())
+                prepare.normalized_curl(installed,dest,'x64')
+                for config,sub in [('Release','lib'),('Debug','debug/lib')]:
+                    self.assertEqual((dest/'lib/x64'/config/'libcurl.lib').read_bytes(),b'curl')
+                    self.assertEqual((dest/'lib/x64'/config/'zlib.lib').read_bytes(),sub.encode())
+
+    def test_apple_sanitizers_keep_checks_without_unsupported_leak_detection(self):
+        workflow=yaml.load((SOURCE/'.github/workflows/sanitizers.yml').read_text(),Loader=yaml.BaseLoader)
+        job=workflow['jobs']['sanitizers']
+        self.assertTrue(job['runs-on'].startswith('macos-'))
+        self.assertEqual(set(job['strategy']['matrix']['sanitizer']),{'address,undefined','thread'})
+        step=next(x for x in job['steps'] if x.get('name')=='Run sanitizer suites')
+        self.assertEqual(step['env']['ASAN_OPTIONS'],'detect_leaks=0:halt_on_error=1')
+        self.assertEqual(step['env']['UBSAN_OPTIONS'],'halt_on_error=1:print_stacktrace=1')
+        self.assertEqual(step['env']['TSAN_OPTIONS'],'halt_on_error=1')
 
     def test_sdk_factory_classes_allow_sdk_inheritance(self):
         import re
@@ -175,7 +189,7 @@ class CIContracts(unittest.TestCase):
                 self.assertEqual(runner.build(source,state,'Release'),output)
                 calls=[x.args[0] for x in command.call_args_list]
                 self.assertEqual(calls[0][0],'xcodebuild');self.assertIn('ARCHS=arm64',calls[0]);self.assertEqual(calls[-1],['codesign','--verify','--strict',output])
-                self.assertIn(['lipo','-verify_arch','arm64',binary],calls)
+                self.assertIn(['lipo',binary,'-verify_arch','arm64'],calls)
             with patch.object(runner.sys,'platform','darwin'),patch.object(runner,'run'),patch.object(runner.subprocess,'check_output',return_value='wrong_symbol'),self.assertRaises(RuntimeError):runner.build(source,state,'Release')
 
     def test_artifacts_contain_real_output_and_checksums_for_every_target(self):

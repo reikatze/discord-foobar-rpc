@@ -43,7 +43,7 @@ def build(source,state,config):
         output=derived/'Build/Products'/config/'discord-foobar-rpc.component'
         executable=output/'Contents/MacOS/discord-foobar-rpc'
         if not executable.is_file():raise RuntimeError('Native component bundle was not produced')
-        run(['lipo','-verify_arch',arch,executable])
+        run(['lipo',executable,'-verify_arch',arch])
         symbols=subprocess.check_output(['nm','-gU',str(executable)],text=True)
         if '_foobar2000_get_interface' not in symbols:raise RuntimeError('Component entrypoint export missing')
         run(['codesign','--force','--sign','-',output]);run(['codesign','--verify','--strict',output])
