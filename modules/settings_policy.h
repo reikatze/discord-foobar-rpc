@@ -11,5 +11,5 @@ public:
 };
 void apply_settings(SettingsStore& store,const Settings& settings,const std::function<void()>& changed);
 using DirectoryProbe=std::function<bool(const std::filesystem::path&)>;
-std::filesystem::path choose_cache_folder(const std::filesystem::path& profile,const std::filesystem::path& fallback,const DirectoryProbe& writable);
+std::filesystem::path choose_cache_folder(const std::filesystem::path& application_data,const DirectoryProbe& writable);
 }

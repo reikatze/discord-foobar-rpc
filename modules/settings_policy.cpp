@@ -6,10 +6,10 @@ void apply_settings(SettingsStore& store,const Settings& settings,const std::fun
     store.write(settings);
     if(changed)changed();
 }
-std::filesystem::path choose_cache_folder(const std::filesystem::path& profile,const std::filesystem::path& fallback,const DirectoryProbe& writable) {
-    const auto safe_probe=[&](const auto& folder){try{return !folder.empty()&&writable(folder);}catch(...){return false;}};
-    if(safe_probe(profile))return profile;
-    if(safe_probe(fallback))return fallback;
+std::filesystem::path choose_cache_folder(const std::filesystem::path& application_data,const DirectoryProbe& writable) {
+    if(application_data.empty())return {};
+    auto folder=application_data/"discord-foobar-rpc";
+    try {if(writable(folder))return folder;}catch(...){}
     return {};
 }
 }

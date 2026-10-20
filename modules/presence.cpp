@@ -18,7 +18,7 @@ json PlaybackClock::timestamps(const Playback& p, double duration) {
 json make_activity(const Playback& p, const Metadata& m, PlaybackClock& clock) {
     if (!p.active) { clock.reset(); return nullptr; }
     auto title = !p.track.title.empty() ? p.track.title : !m.title.empty() ? m.title : p.track.fallback_title;
-    auto artist = !p.track.artist.empty() ? p.track.artist : m.artist;
+    auto artist = !p.track.artist.empty() ? p.track.artist : !m.artist.empty() ? m.artist : p.track.fallback_artist;
     if (title.empty()) title="Unknown track";
     if (artist.empty()) artist="Unknown artist";
     // Discord owns the third row/progress rendering; timestamps provide elapsed and remaining time.

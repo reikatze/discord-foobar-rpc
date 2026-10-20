@@ -32,25 +32,15 @@ public:
 Settings read_settings(){FoobarSettingsStore store;return store.read();}
 void write_settings(const Settings& settings) {FoobarSettingsStore store;apply_settings(store,settings,settings_changed);}
 std::filesystem::path select_cache_folder() {
-    // Authoritative host profile includes portable profiles and custom foobar profile locations.
-    // Never write into a DLL folder or signed macOS .component bundle merely because it is nearby.
-    std::filesystem::path profile;
-    try {
-        pfc::string8 native;
-        if(filesystem::g_get_native_path(core_api::get_profile_path(),native)) {
-            profile=std::filesystem::u8path(native.c_str())/"discord-foobar-rpc"/"metadata-cache";
-
-        }
-    }catch(...){}
-    std::filesystem::path fallback;
+    std::filesystem::path application_data;
 #ifdef _WIN32
     PWSTR appdata=nullptr;
     if(SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData,KF_FLAG_DEFAULT,nullptr,&appdata))) {
-        fallback=std::filesystem::path(appdata)/"discord-foobar-rpc"/"metadata-cache";CoTaskMemFree(appdata);
+        application_data=std::filesystem::path(appdata);CoTaskMemFree(appdata);
     }
 #elif defined(__APPLE__)
-    if(const char* home=std::getenv("HOME"))fallback=std::filesystem::u8path(home)/"Library"/"Application Support"/"discord-foobar-rpc"/"metadata-cache";
+    if(const char* home=std::getenv("HOME");home&&*home)application_data=std::filesystem::u8path(home)/"Library"/"Application Support";
 #endif
-    return choose_cache_folder(profile,fallback,writable); // Memory-only behavior: metadata/presence continue even when both locations are unwritable.
+    return choose_cache_folder(application_data,writable); // Use memory-only caching if the requested location is unavailable.
 }
 }

@@ -42,6 +42,8 @@ private:
         pfc::string8 filename;
         if(filesystem::g_get_display_name_short(item->get_path(),filename)) {
             t.fallback_title=filename.c_str();auto dot=t.fallback_title.find_last_of('.');if(dot!=std::string::npos)t.fallback_title.resize(dot);
+            const std::string path=item->get_path();
+            if(!dynamic&&(path.starts_with("file://")||path.find("://")==std::string::npos))apply_filename_fallback(t,filename.c_str());
         }
         auto control=playback_control::get();double length=control->playback_get_length();
         if(std::isfinite(length)&&length>0)t.duration=length;

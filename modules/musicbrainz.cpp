@@ -249,13 +249,45 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
         }
     }
     if(recording.is_null() && result.recording_id.empty() && ((result.release_id.empty()&&result.release_group_id.empty())||t.title.empty()||t.artist.empty()||t.duration<=0) && (!t.title.empty()||!t.fallback_title.empty())) {
-        auto title=t.title.empty()?t.fallback_title:t.title;
-        std::string query="recording:"+literal(title);
-        if(!t.artist.empty())query+=" AND artist:"+literal(t.artist);
-        if(!t.album.empty())query+=" AND release:"+literal(t.album);
-        auto data=request("recording/?query="+url_encode(query)+"&limit=10&fmt=json",cancelled);
-        if(data.is_object()&&data.contains("recordings"))if(auto match=pick_recording(data["recordings"],t)) {
-            recording=*match;recording_metadata(recording,result);
+        Track search=t;
+        if(search.title.empty())search.title=t.fallback_title;
+        if(search.artist.empty())search.artist=t.fallback_artist;
+        const bool filename_orders=t.title.empty()&&t.artist.empty()&&
+            !t.fallback_title.empty()&&!t.fallback_artist.empty();
+        // Tags retain their meaning. Only an untagged filename permits reversal.
+        std::vector<Track> searches{search};
+        if(filename_orders&&!equal_name(search.title,search.artist)) {
+            std::swap(search.title,search.artist);
+            searches.push_back(search);
+        }
+        json verified=nullptr;
+        bool ambiguous=false;
+        for(const auto& interpretation:searches) {
+            std::string query="recording:"+literal(interpretation.title);
+            if(!interpretation.artist.empty())query+=" AND artist:"+literal(interpretation.artist);
+            if(!t.album.empty())query+=" AND release:"+literal(t.album);
+            auto data=request("recording/?query="+url_encode(query)+"&limit=10&fmt=json",cancelled);
+            if(!data.is_object()||!data.contains("recordings")||!data["recordings"].is_array())continue;
+            if(!filename_orders) {
+                if(auto match=pick_recording(data["recordings"],interpretation))verified=*match;
+                continue;
+            }
+            // Evaluate every candidate across both orders before accepting one.
+            // Search ranking alone cannot decide which side of a filename is the artist.
+            for(const auto& row:data["recordings"]) {
+                if(std::isfinite(t.duration)&&t.duration>0) {
+                    if(!row.is_object()||!row.contains("length")||!row["length"].is_number())continue;
+                    const auto seconds=row["length"].get<double>()/1000.0;
+                    if(!std::isfinite(seconds)||std::abs(seconds-t.duration)>5)continue;
+                }
+                auto single=json::array({row});
+                if(!pick_recording(single,interpretation))continue;
+                if(verified.is_null())verified=row;
+                else if(!equal_name(id_of(verified),id_of(row)))ambiguous=true;
+            }
+        }
+        if(!ambiguous&&!verified.is_null()) {
+            recording=verified;recording_metadata(recording,result);
         }
     }
     // Resolve releases belonging to the verified recording, preferring a tagged album.

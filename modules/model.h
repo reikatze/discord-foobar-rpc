@@ -12,7 +12,7 @@ struct Settings {
     bool operator==(const Settings&) const = default;
 };
 struct Track {
-    std::string identity, title, artist, album, album_artist, fallback_title;
+    std::string identity, title, artist, album, album_artist, fallback_title, fallback_artist;
     std::string recording_id, release_id, release_group_id;
     unsigned track_number = 0, disc_number = 0;
     double duration = 0;
@@ -46,6 +46,7 @@ bool valid_mbid(const std::string& value);
 bool valid_application_id(const std::string& value);
 std::string lookup_key(const Track& track);
 bool same_lookup_inputs(const Track& a,const Track& b);
+void apply_filename_fallback(Track& track,const std::string& filename);
 Track merge_dynamic_track(const Track& previous,Track incoming);
 std::string artist_credit(const json& value);
 std::string time_text(double seconds);
