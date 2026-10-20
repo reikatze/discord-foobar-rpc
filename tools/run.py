@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import zipfile
 import xml.etree.ElementTree as ET
 
 def run(args,**kwargs):
@@ -66,11 +67,10 @@ def stage_artifact(source,output,arch,config):
         payload=folder/'discord-foobar-rpc.component.tar.gz'
         with tarfile.open(payload,'w:gz',dereference=False) as archive:archive.add(output,arcname=output.name)
     else:
-        payload=folder/output.name;shutil.copy2(output,payload)
-    for notice in ['LICENSE','THIRD_PARTY_NOTICES.md']:shutil.copy2(source/notice,folder/notice)
-    checksums=[]
-    for file in sorted(folder.iterdir()):checksums.append(hashlib.sha256(file.read_bytes()).hexdigest()+'  '+file.name)
-    (folder/'SHA256SUMS.txt').write_text('\n'.join(checksums)+'\n',encoding='utf-8')
+        payload=folder/'discord-foobar-rpc.fb2k-component'
+        entry=('x64/' if arch=='x64' else '')+output.name
+        with zipfile.ZipFile(payload,'w',compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.write(output,arcname=entry)
     target=os.environ.get('GITHUB_OUTPUT')
     if target:
         with open(target,'a',encoding='utf-8') as f:f.write('artifact_name='+name+'\nartifact_path='+str(folder.resolve())+'\n')

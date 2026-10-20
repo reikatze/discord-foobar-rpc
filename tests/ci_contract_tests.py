@@ -6,7 +6,9 @@ from pathlib import Path
 import struct
 import tempfile
 import tarfile
+import zipfile
 import os
+import sys
 import unittest
 import xml.etree.ElementTree as ET
 import yaml
@@ -16,6 +18,7 @@ SOURCE=Path(__file__).resolve().parents[1]
 def load(name):
     spec=importlib.util.spec_from_file_location(name,SOURCE/'tools'/f'{name}.py');module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module);return module
 prepare=load('prepare');runner=load('run')
+with patch.dict(sys.modules,{'run':runner}):packager=load('package')
 
 class CIContracts(unittest.TestCase):
     def test_pinned_sdk_and_vcpkg(self):
@@ -166,9 +169,67 @@ class CIContracts(unittest.TestCase):
         self.assertNotIn('continue-on-error',build)
         self.assertNotIn('if',upload) # Default success() gating; never upload failed builds.
         self.assertEqual(upload['with']['path'],'${{ steps.addon.outputs.artifact_path }}')
-        self.assertEqual(upload['with']['name'],'${{ steps.addon.outputs.artifact_name }}')
+        self.assertEqual(upload['with']['name'],'native-input-${{ steps.addon.outputs.artifact_name }}')
         self.assertEqual(upload['with']['if-no-files-found'],'error')
+        self.assertEqual(upload['with']['retention-days'],'1')
+
+    def test_single_package_job_waits_for_every_native_build(self):
+        workflow=yaml.load((SOURCE/'.github/workflows/build-test.yml').read_text(),Loader=yaml.BaseLoader)
+        job=workflow['jobs']['package']
+        self.assertEqual(job['needs'],'native')
+        self.assertNotIn('if',job)
+        steps=job['steps']
+        download=next(x for x in steps if x.get('uses')=='actions/download-artifact@v4')
+        self.assertEqual(download['with']['pattern'],'native-input-*')
+        upload=next(x for x in steps if x.get('uses')=='actions/upload-artifact@v4')
+        self.assertEqual(upload['with']['path'],'dist/discord-foobar-rpc.fb2k-component')
+        self.assertEqual(upload['with']['name'],'discord-foobar-rpc')
         self.assertEqual(upload['with']['retention-days'],'30')
+        cleanup=next(x for x in steps if x.get('name')=='Remove intermediate build artifacts')
+        self.assertLess(steps.index(upload),steps.index(cleanup))
+        self.assertIn("artifact['name'].startswith('native-input-')",cleanup['run'])
+
+    def test_combined_package_contains_both_windows_and_universal_mac(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);inputs=root/'inputs';destination=root/'dist/discord-foobar-rpc.fb2k-component'
+            name='discord-foobar-rpc'
+            for arch in ['x86','x64']:
+                folder=inputs/f'native-input-{name}-windows-{arch}-Release';folder.mkdir(parents=True)
+                with zipfile.ZipFile(folder/(name+'.fb2k-component'),'w') as archive:
+                    archive.writestr(('x64/' if arch=='x64' else '')+name+'.dll',arch.encode())
+            for arch in ['x64','arm64']:
+                folder=inputs/f'native-input-{name}-macos-{arch}-Release';folder.mkdir(parents=True)
+                bundle=root/arch/(name+'.component')
+                binary=bundle/'Contents/MacOS'/name;binary.parent.mkdir(parents=True);binary.write_bytes(arch.encode());binary.chmod(0o755)
+                (bundle/'Contents/Info.plist').write_bytes(b'plist')
+                with tarfile.open(folder/(name+'.component.tar.gz'),'w:gz') as archive:archive.add(bundle,arcname=bundle.name)
+            def command(args):
+                if args[:2]==['lipo','-create']:
+                    self.assertEqual(args[2].read_bytes(),b'x64')
+                    self.assertEqual(args[3].read_bytes(),b'arm64')
+                    args[-1].write_bytes(b'universal')
+            with patch.object(packager,'inspect_pe') as inspect,patch.object(packager,'command',side_effect=command) as commands:
+                packager.package(inputs,destination)
+                self.assertEqual([x.args[1] for x in inspect.call_args_list],['x86','x64'])
+                calls=[x.args[0] for x in commands.call_args_list]
+                self.assertEqual(calls[1][-3:],['-verify_arch','x86_64','arm64'])
+                self.assertEqual(calls[-1][:3],['codesign','--verify','--strict'])
+            with zipfile.ZipFile(destination) as archive:
+                mac='mac/'+name+'.component/Contents/'
+                self.assertEqual(set(archive.namelist()),{name+'.dll','x64/'+name+'.dll',mac+'Info.plist',mac+'MacOS/'+name})
+                self.assertEqual(archive.read(name+'.dll'),b'x86')
+                self.assertEqual(archive.read('x64/'+name+'.dll'),b'x64')
+                self.assertEqual(archive.read(mac+'MacOS/'+name),b'universal')
+                self.assertTrue((archive.getinfo(mac+'MacOS/'+name).external_attr>>16)&0o111)
+                self.assertIsNone(archive.testzip())
+            destination.unlink()
+            with patch.object(packager,'inspect_pe'),patch.object(packager,'command',side_effect=RuntimeError('signing failed')),self.assertRaisesRegex(RuntimeError,'signing failed'):
+                packager.package(inputs,destination)
+            self.assertFalse(destination.exists())
+            (inputs/f'native-input-{name}-windows-x64-Release'/(name+'.fb2k-component')).unlink()
+            with patch.object(packager,'inspect_pe'),self.assertRaisesRegex(RuntimeError,'Missing native input'):
+                packager.package(inputs,destination)
+            self.assertFalse(destination.exists())
 
     def test_windows_build_invokes_native_project_and_inspection(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -192,10 +253,9 @@ class CIContracts(unittest.TestCase):
                 self.assertIn(['lipo',binary,'-verify_arch','arm64'],calls)
             with patch.object(runner.sys,'platform','darwin'),patch.object(runner,'run'),patch.object(runner.subprocess,'check_output',return_value='wrong_symbol'),self.assertRaises(RuntimeError):runner.build(source,state,'Release')
 
-    def test_artifacts_contain_real_output_and_checksums_for_every_target(self):
+    def test_artifacts_contain_only_installable_output_for_every_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             source=Path(tmp)
-            for notice in ['LICENSE','THIRD_PARTY_NOTICES.md']:(source/notice).write_text('fixture notice')
             output=source/'native/discord-foobar-rpc.dll';output.parent.mkdir();output.write_bytes(b'native fixture')
             env=source/'github-output'
             for platform,arch in [('win32','x86'),('win32','x64'),('darwin','x64'),('darwin','arm64')]:
@@ -205,13 +265,19 @@ class CIContracts(unittest.TestCase):
                         native=source/'native/discord-foobar-rpc.component';binary=native/'Contents/MacOS/discord-foobar-rpc';binary.parent.mkdir(parents=True,exist_ok=True);binary.write_bytes(b'native fixture');binary.chmod(0o755)
                         (native/'Contents/Info.plist').write_text('fixture plist')
                     with patch.object(runner.sys,'platform',platform),patch.dict(os.environ,{'GITHUB_OUTPUT':str(env)}):folder=runner.stage_artifact(source,native,arch,config)
-                    for line in (folder/'SHA256SUMS.txt').read_text().splitlines():
-                        digest,name=line.split('  ',1);self.assertEqual(digest,hashlib.sha256((folder/name).read_bytes()).hexdigest())
                     if platform=='darwin':
                         with tarfile.open(folder/'discord-foobar-rpc.component.tar.gz') as archive:
                             entry=archive.getmember('discord-foobar-rpc.component/Contents/MacOS/discord-foobar-rpc');self.assertEqual(entry.mode&0o777,binary.stat().st_mode&0o777);self.assertEqual(archive.extractfile(entry).read(),b'native fixture')
                             self.assertIn('discord-foobar-rpc.component/Contents/Info.plist',archive.getnames())
-                    else:self.assertEqual((folder/output.name).read_bytes(),b'native fixture')
+                        self.assertEqual({p.name for p in folder.iterdir()},{'discord-foobar-rpc.component.tar.gz'})
+                    else:
+                        package=folder/'discord-foobar-rpc.fb2k-component'
+                        self.assertEqual({p.name for p in folder.iterdir()},{package.name})
+                        with zipfile.ZipFile(package) as archive:
+                            entry=('x64/' if arch=='x64' else '')+output.name
+                            self.assertEqual(archive.namelist(),[entry])
+                            self.assertEqual(archive.read(entry),b'native fixture')
+                            self.assertIsNone(archive.testzip())
             self.assertEqual(env.read_text().count('artifact_name='),8)
             output.write_bytes(b'')
             with patch.object(runner.sys,'platform','win32'),self.assertRaises(RuntimeError):runner.stage_artifact(source,output,'x64','Release')

@@ -55,13 +55,13 @@ jobs:
           from pathlib import Path
           source = Path(os.environ['DMT_SOURCE'])
           subprocess.run([sys.executable, str(source / 'tools/run.py'), 'build', '--source', str(source), '--configuration', '${{ matrix.configuration }}'], check=True)
-      - name: Upload native addon
+      - name: Transfer native build input
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.addon.outputs.artifact_name }}
+          name: native-input-${{ steps.addon.outputs.artifact_name }}
           path: ${{ steps.addon.outputs.artifact_path }}
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 1
           compression-level: 0
       - name: Print diagnostics on failure
         if: failure()
@@ -73,3 +73,54 @@ jobs:
               file = source / name
               if file.is_file():
                   print(file.read_text(encoding='utf-8', errors='replace'))
+  package:
+    name: Single installable component
+    needs: native
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    defaults:
+      run:
+        shell: python
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-input-*
+          path: native-inputs
+      - name: Package all supported platforms
+        run: |
+          import subprocess, sys
+          from pathlib import Path
+          root = Path.cwd()
+          matches = [p for p in [root, root / 'Source', root / 'discord-foobar-rpc' / 'Source', root / 'Discord Music Tracker' / 'Source'] if (p / 'tools/package.py').is_file() and (p / 'main.cpp').is_file()]
+          if len(matches) != 1:
+              raise RuntimeError('Expected one Source root')
+          subprocess.run([sys.executable, str(matches[0] / 'tools/package.py'), '--inputs', str(root / 'native-inputs'), '--output', str(root / 'dist/discord-foobar-rpc.fb2k-component')], check=True)
+      - name: Upload installable component
+        uses: actions/upload-artifact@v4
+        with:
+          name: discord-foobar-rpc
+          path: dist/discord-foobar-rpc.fb2k-component
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Remove intermediate build artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import json, os, urllib.request
+          base = os.environ['GITHUB_API_URL'] + '/repos/' + os.environ['GITHUB_REPOSITORY']
+          headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'}
+          url = base + '/actions/runs/' + os.environ['GITHUB_RUN_ID'] + '/artifacts?per_page=100'
+          with urllib.request.urlopen(urllib.request.Request(url, headers=headers)) as response:
+              artifacts = json.load(response)['artifacts']
+          for artifact in artifacts:
+              if artifact['name'].startswith('native-input-'):
+                  request = urllib.request.Request(base + '/actions/artifacts/' + str(artifact['id']), headers=headers, method='DELETE')
+                  with urllib.request.urlopen(request):
+                      pass
