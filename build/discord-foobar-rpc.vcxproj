@@ -35,7 +35,7 @@
     <FoobarSdkRoot Condition="'$(FoobarSdkRoot)'==''">$(SourceRoot)third_party\foobar-sdk</FoobarSdkRoot>
     <JsonIncludeDir Condition="'$(JsonIncludeDir)'==''">$(SourceRoot)third_party\nlohmann\include</JsonIncludeDir>
     <CurlRoot Condition="'$(CurlRoot)'==''">$(SourceRoot)third_party\curl</CurlRoot>
-    <TargetName>discord-foobar-rpc</TargetName>
+    <TargetName>foo_discord_foobar_rpc</TargetName>
     <OutDir>$(SourceRoot)out\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SourceRoot)out\obj\$(Platform)\$(Configuration)\</IntDir>
     <CurlLibraries Condition="'$(CurlLibraries)'==''">libcurl.lib;zlib.lib</CurlLibraries>
