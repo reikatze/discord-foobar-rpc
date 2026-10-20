@@ -12,10 +12,10 @@ Both workflows trigger on push, pull request and manual dispatch. Permissions ar
 
 | Runner | Native architecture | Configurations | Addon output |
 |---|---|---|---|
-| windows-2022 | x86 / Win32 | Release | `discord-foobar-rpc.dll` |
-| windows-2022 | x64 | Release | `discord-foobar-rpc.dll` |
-| macos-15-intel | x86_64 | Release | `discord-foobar-rpc.component` |
-| macos-15 | arm64 | Release | `discord-foobar-rpc.component` |
+| windows-2022 | x86 / Win32 | Release | `foo_discord_foobar_rpc.dll` |
+| windows-2022 | x64 | Release | `foo_discord_foobar_rpc.dll` |
+| macos-15-intel | x86_64 | Release | `foo_discord_foobar_rpc.component` |
+| macos-15 | arm64 | Release | `foo_discord_foobar_rpc.component` |
 
 Each job runs 21 Python CI-helper contract tests and seven CTest executables, then builds the native addon. Tests must pass before the addon build runs. Mac sanitizer jobs additionally run AddressSanitizer/UndefinedBehaviorSanitizer or ThreadSanitizer on the production core and tests.
 
@@ -61,9 +61,13 @@ CTest emits `out/ci/test-results.xml`; failures print their log into the job out
 
 The final macOS job waits for all four Release builds, combines the Intel and Apple Silicon executables with `lipo`, verifies both architectures, and signs and verifies the universal macOS bundle again. It then creates one ZIP-format `discord-foobar-rpc.fb2k-component` containing:
 
-- `discord-foobar-rpc.dll` — Windows x86
-- `x64/discord-foobar-rpc.dll` — Windows x64
-- `mac/discord-foobar-rpc.component/` — universal macOS bundle
+- `foo_discord_foobar_rpc.dll` — Windows x86
+- `x64/foo_discord_foobar_rpc.dll` — Windows x64
+- `mac/foo_discord_foobar_rpc.component/` — universal macOS bundle
+
+The macOS product is `foo_discord_foobar_rpc.component`, with executable `Contents/MacOS/foo_discord_foobar_rpc`, for both architectures and the universal package. Xcode project and scheme names remain `discord-foobar-rpc`. Rebuild macOS outputs so the generated bundle metadata and signature match the new names.
+
+Windows DLL filenames must match `foo_*.dll` for component discovery. The native project, SDK filename validation and package entries all use `foo_discord_foobar_rpc.dll`; the download remains `discord-foobar-rpc.fb2k-component`. Rebuild the Windows DLLs after this change: renaming old binaries alone will fail their embedded filename validation.
 
 The package contains no LICENSE, THIRD_PARTY_NOTICES or SHA256SUMS files. Both Windows DLLs are inspected again before packaging. Missing inputs, invalid archive contents, architecture or signing failures prevent the final upload. The package archive preserves macOS executable permissions.
 

@@ -192,17 +192,17 @@ class CIContracts(unittest.TestCase):
     def test_combined_package_contains_both_windows_and_universal_mac(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);inputs=root/'inputs';destination=root/'dist/discord-foobar-rpc.fb2k-component'
-            name='discord-foobar-rpc'
+            name='discord-foobar-rpc';mac_name='foo_discord_foobar_rpc'
             for arch in ['x86','x64']:
                 folder=inputs/f'native-input-{name}-windows-{arch}-Release';folder.mkdir(parents=True)
                 with zipfile.ZipFile(folder/(name+'.fb2k-component'),'w') as archive:
-                    archive.writestr(('x64/' if arch=='x64' else '')+name+'.dll',arch.encode())
+                    archive.writestr(('x64/' if arch=='x64' else '')+'foo_discord_foobar_rpc.dll',arch.encode())
             for arch in ['x64','arm64']:
                 folder=inputs/f'native-input-{name}-macos-{arch}-Release';folder.mkdir(parents=True)
-                bundle=root/arch/(name+'.component')
-                binary=bundle/'Contents/MacOS'/name;binary.parent.mkdir(parents=True);binary.write_bytes(arch.encode());binary.chmod(0o755)
+                bundle=root/arch/(mac_name+'.component')
+                binary=bundle/'Contents/MacOS'/mac_name;binary.parent.mkdir(parents=True);binary.write_bytes(arch.encode());binary.chmod(0o755)
                 (bundle/'Contents/Info.plist').write_bytes(b'plist')
-                with tarfile.open(folder/(name+'.component.tar.gz'),'w:gz') as archive:archive.add(bundle,arcname=bundle.name)
+                with tarfile.open(folder/(mac_name+'.component.tar.gz'),'w:gz') as archive:archive.add(bundle,arcname=bundle.name)
             def command(args):
                 if args[:2]==['lipo','-create']:
                     self.assertEqual(args[2].read_bytes(),b'x64')
@@ -221,12 +221,12 @@ class CIContracts(unittest.TestCase):
                 self.assertEqual(calls[1][-3:],['-verify_arch','x86_64','arm64'])
                 self.assertEqual(calls[-1][:3],['codesign','--verify','--strict'])
             with zipfile.ZipFile(destination) as archive:
-                mac='mac/'+name+'.component/Contents/'
-                self.assertEqual(set(archive.namelist()),{name+'.dll','x64/'+name+'.dll',mac+'Info.plist',mac+'MacOS/'+name})
-                self.assertEqual(archive.read(name+'.dll'),b'x86')
-                self.assertEqual(archive.read('x64/'+name+'.dll'),b'x64')
-                self.assertEqual(archive.read(mac+'MacOS/'+name),b'universal')
-                executable=archive.getinfo(mac+'MacOS/'+name)
+                mac='mac/'+mac_name+'.component/Contents/'
+                self.assertEqual(set(archive.namelist()),{'foo_discord_foobar_rpc.dll','x64/foo_discord_foobar_rpc.dll',mac+'Info.plist',mac+'MacOS/'+mac_name})
+                self.assertEqual(archive.read('foo_discord_foobar_rpc.dll'),b'x86')
+                self.assertEqual(archive.read('x64/foo_discord_foobar_rpc.dll'),b'x64')
+                self.assertEqual(archive.read(mac+'MacOS/'+mac_name),b'universal')
+                executable=archive.getinfo(mac+'MacOS/'+mac_name)
                 self.assertEqual(executable.create_system,3)
                 self.assertEqual((executable.external_attr>>16)&0o777,0o755)
                 self.assertIsNone(archive.testzip())
@@ -241,7 +241,7 @@ class CIContracts(unittest.TestCase):
 
     def test_windows_build_invokes_native_project_and_inspection(self):
         with tempfile.TemporaryDirectory() as tmp:
-            source=Path(tmp);output=source/'out/Win32/Release/discord-foobar-rpc.dll';output.parent.mkdir(parents=True);output.write_bytes(b'fixture')
+            source=Path(tmp);output=source/'out/Win32/Release/foo_discord_foobar_rpc.dll';output.parent.mkdir(parents=True);output.write_bytes(b'fixture')
             state={'arch':'x86','sdk':'sdk','json_include':'json'}
             with patch.object(runner.sys,'platform','win32'),patch.object(runner,'msbuild',return_value='MSBuild.exe'),patch.object(runner,'run') as command,patch.object(runner,'inspect_pe') as inspect:
                 self.assertEqual(runner.build(source,state,'Release'),output)
@@ -252,7 +252,7 @@ class CIContracts(unittest.TestCase):
 
     def test_macos_build_checks_architecture_export_and_signature(self):
         with tempfile.TemporaryDirectory() as tmp:
-            source=Path(tmp);output=source/'out/xcode/Build/Products/Release/discord-foobar-rpc.component';binary=output/'Contents/MacOS/discord-foobar-rpc';binary.parent.mkdir(parents=True);binary.write_bytes(b'fixture')
+            source=Path(tmp);output=source/'out/xcode/Build/Products/Release/foo_discord_foobar_rpc.component';binary=output/'Contents/MacOS/foo_discord_foobar_rpc';binary.parent.mkdir(parents=True);binary.write_bytes(b'fixture')
             state={'arch':'arm64','json_include':'json','sdk':'sdk'}
             with patch.object(runner.sys,'platform','darwin'),patch.object(runner,'run') as command,patch.object(runner.subprocess,'check_output',return_value='_foobar2000_get_interface'):
                 self.assertEqual(runner.build(source,state,'Release'),output)
@@ -264,20 +264,20 @@ class CIContracts(unittest.TestCase):
     def test_artifacts_contain_only_installable_output_for_every_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             source=Path(tmp)
-            output=source/'native/discord-foobar-rpc.dll';output.parent.mkdir();output.write_bytes(b'native fixture')
+            output=source/'native/foo_discord_foobar_rpc.dll';output.parent.mkdir();output.write_bytes(b'native fixture')
             env=source/'github-output'
             for platform,arch in [('win32','x86'),('win32','x64'),('darwin','x64'),('darwin','arm64')]:
                 for config in ['Debug','Release']:
                     native=output
                     if platform=='darwin':
-                        native=source/'native/discord-foobar-rpc.component';binary=native/'Contents/MacOS/discord-foobar-rpc';binary.parent.mkdir(parents=True,exist_ok=True);binary.write_bytes(b'native fixture');binary.chmod(0o755)
+                        native=source/'native/foo_discord_foobar_rpc.component';binary=native/'Contents/MacOS/foo_discord_foobar_rpc';binary.parent.mkdir(parents=True,exist_ok=True);binary.write_bytes(b'native fixture');binary.chmod(0o755)
                         (native/'Contents/Info.plist').write_text('fixture plist')
                     with patch.object(runner.sys,'platform',platform),patch.dict(os.environ,{'GITHUB_OUTPUT':str(env)}):folder=runner.stage_artifact(source,native,arch,config)
                     if platform=='darwin':
-                        with tarfile.open(folder/'discord-foobar-rpc.component.tar.gz') as archive:
-                            entry=archive.getmember('discord-foobar-rpc.component/Contents/MacOS/discord-foobar-rpc');self.assertEqual(entry.mode&0o777,binary.stat().st_mode&0o777);self.assertEqual(archive.extractfile(entry).read(),b'native fixture')
-                            self.assertIn('discord-foobar-rpc.component/Contents/Info.plist',archive.getnames())
-                        self.assertEqual({p.name for p in folder.iterdir()},{'discord-foobar-rpc.component.tar.gz'})
+                        with tarfile.open(folder/'foo_discord_foobar_rpc.component.tar.gz') as archive:
+                            entry=archive.getmember('foo_discord_foobar_rpc.component/Contents/MacOS/foo_discord_foobar_rpc');self.assertEqual(entry.mode&0o777,binary.stat().st_mode&0o777);self.assertEqual(archive.extractfile(entry).read(),b'native fixture')
+                            self.assertIn('foo_discord_foobar_rpc.component/Contents/Info.plist',archive.getnames())
+                        self.assertEqual({p.name for p in folder.iterdir()},{'foo_discord_foobar_rpc.component.tar.gz'})
                     else:
                         package=folder/'discord-foobar-rpc.fb2k-component'
                         self.assertEqual({p.name for p in folder.iterdir()},{package.name})
@@ -289,10 +289,15 @@ class CIContracts(unittest.TestCase):
             self.assertEqual(env.read_text().count('artifact_name='),8)
             output.write_bytes(b'')
             with patch.object(runner.sys,'platform','win32'),self.assertRaises(RuntimeError):runner.stage_artifact(source,output,'x64','Release')
+            legacy=output.with_name('discord-foobar-rpc.dll');legacy.write_bytes(b'native fixture')
+            with patch.object(runner.sys,'platform','win32'),self.assertRaisesRegex(RuntimeError,'DLL filename'):
+                runner.stage_artifact(source,legacy,'x64','Release')
 
     def test_native_projects_include_policy_and_shared_scheme(self):
         ns={'m':'http://schemas.microsoft.com/developer/msbuild/2003'}
         project=ET.parse(SOURCE/'build/discord-foobar-rpc.vcxproj')
+        self.assertEqual(project.find('.//m:TargetName',ns).text,'foo_discord_foobar_rpc')
+        self.assertIn('VALIDATE_COMPONENT_FILENAME("foo_discord_foobar_rpc.dll")',(SOURCE/'main.cpp').read_text())
         self.assertIn('..\\modules\\settings_policy.cpp',[x.attrib.get('Include') for x in project.findall('.//m:ClCompile',ns)])
         for kind in ['ClCompile', 'ClInclude', 'ResourceCompile']:
             for item in project.findall('.//m:' + kind, ns):
@@ -301,11 +306,14 @@ class CIContracts(unittest.TestCase):
         self.assertEqual(project.find('.//m:SourceRoot', ns).text, '$(MSBuildThisFileDirectory)..\\')
         pbx=(SOURCE/'build/discord-foobar-rpc.xcodeproj/project.pbxproj').read_text()
         self.assertIn('../modules/settings_policy.cpp',pbx)
+        self.assertEqual(pbx.count('PRODUCT_NAME = foo_discord_foobar_rpc;'),2)
+        self.assertIn('path = foo_discord_foobar_rpc.component;',pbx)
         import re
         for path in re.findall(r'path = "(\.\./(?:modules/|platform/|main\.cpp)[^"]*)";', pbx):
             self.assertTrue((SOURCE / 'build' / path).is_file())
         self.assertIn('$(PROJECT_DIR)/../third_party/foobar-sdk', pbx)
-        ET.parse(SOURCE/'build/discord-foobar-rpc.xcodeproj/xcshareddata/xcschemes/discord-foobar-rpc.xcscheme')
+        scheme=ET.parse(SOURCE/'build/discord-foobar-rpc.xcodeproj/xcshareddata/xcschemes/discord-foobar-rpc.xcscheme')
+        self.assertEqual(scheme.find('.//BuildableReference').attrib['BuildableName'],'foo_discord_foobar_rpc.component')
         workspace = ET.parse(SOURCE/'build/discord-foobar-rpc.xcworkspace/contents.xcworkspacedata')
         for item in workspace.findall('FileRef'):
             path = item.attrib['location'].removeprefix('group:')

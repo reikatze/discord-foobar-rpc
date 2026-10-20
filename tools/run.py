@@ -11,6 +11,10 @@ import tarfile
 import zipfile
 import xml.etree.ElementTree as ET
 
+WINDOWS_DLL = 'foo_discord_foobar_rpc.dll'
+MAC_EXECUTABLE = 'foo_discord_foobar_rpc'
+MAC_BUNDLE = MAC_EXECUTABLE + '.component'
+
 def run(args,**kwargs):
     print('+',' '.join(map(str,args)),flush=True)
     return subprocess.run(list(map(str,args)),check=True,**kwargs)
@@ -34,15 +38,15 @@ def build(source,state,config):
     if sys.platform=='win32':
         platform='Win32' if state['arch']=='x86' else 'x64'
         run([msbuild(),source/'build/discord-foobar-rpc.vcxproj','/m:2','/t:Build','/p:Configuration='+config,'/p:Platform='+platform,'/p:FoobarSdkRoot='+state['sdk'],'/p:JsonIncludeDir='+state['json_include'],'/p:CurlRoot='+str(source/'third_party/curl'),'/p:VcpkgEnabled=false'])
-        output=source/'out'/platform/config/'discord-foobar-rpc.dll'
+        output=source/'out'/platform/config/WINDOWS_DLL
         if not output.is_file():raise RuntimeError('Native DLL was not produced')
         # Inspect PE headers/export table without loading it into an unsupported test host.
         inspect_pe(output,state['arch'])
     elif sys.platform=='darwin':
         derived=source/'out/xcode';arch='x86_64' if state['arch']=='x64' else 'arm64'
         run(['xcodebuild','-workspace',source/'build/discord-foobar-rpc.xcworkspace','-scheme','discord-foobar-rpc','-configuration',config,'-derivedDataPath',derived,'ARCHS='+arch,'ONLY_ACTIVE_ARCH=YES','CODE_SIGNING_ALLOWED=NO','JSON_INCLUDE_DIR='+state['json_include'],'FOOBAR_SDK_ROOT='+state['sdk'],'build'])
-        output=derived/'Build/Products'/config/'discord-foobar-rpc.component'
-        executable=output/'Contents/MacOS/discord-foobar-rpc'
+        output=derived/'Build/Products'/config/'foo_discord_foobar_rpc.component'
+        executable=output/'Contents/MacOS/foo_discord_foobar_rpc'
         if not executable.is_file():raise RuntimeError('Native component bundle was not produced')
         run(['lipo',executable,'-verify_arch',arch])
         symbols=subprocess.check_output(['nm','-gU',str(executable)],text=True)
@@ -56,7 +60,9 @@ def stage_artifact(source,output,arch,config):
     if not platform:raise RuntimeError('Native addon artifacts require Windows or macOS')
     supported={'windows':{'x86','x64'},'macos':{'x64','arm64'}}
     if arch not in supported[platform] or config not in {'Debug','Release'}:raise RuntimeError('Unsupported build target')
-    binary=output/'Contents/MacOS/discord-foobar-rpc' if platform=='macos' else output
+    if platform=='windows' and output.name!=WINDOWS_DLL:raise RuntimeError('Unexpected Windows component DLL filename')
+    if platform=='macos' and output.name!=MAC_BUNDLE:raise RuntimeError('Unexpected macOS component bundle filename')
+    binary=output/'Contents/MacOS/foo_discord_foobar_rpc' if platform=='macos' else output
     if not binary.is_file() or not binary.stat().st_size:raise RuntimeError('Native addon output missing or empty')
     name=f'discord-foobar-rpc-{platform}-{arch}-{config}'
     folder=source/'out/artifacts'/name
@@ -64,7 +70,7 @@ def stage_artifact(source,output,arch,config):
     folder.mkdir(parents=True)
     if platform=='macos':
         # Artifact ZIP extraction loses executable modes. An inner tar preserves the signed bundle.
-        payload=folder/'discord-foobar-rpc.component.tar.gz'
+        payload=folder/'foo_discord_foobar_rpc.component.tar.gz'
         with tarfile.open(payload,'w:gz',dereference=False) as archive:archive.add(output,arcname=output.name)
     else:
         payload=folder/'discord-foobar-rpc.fb2k-component'
@@ -105,7 +111,7 @@ def summary(source,report=None,output=None,artifact=None):
         lines += ['- '+c.attrib.get('name','test')+': '+('failed' if c.find('failure') is not None or c.find('error') is not None else 'passed') for c in cases]
     if output:
         lines+=['',f'Native output verified: `{output.name}`.']
-        binary=output/'Contents/MacOS/discord-foobar-rpc' if output.is_dir() else output
+        binary=output/'Contents/MacOS/foo_discord_foobar_rpc' if output.is_dir() else output
         lines+=['SHA-256: `'+hashlib.sha256(binary.read_bytes()).hexdigest()+'`.']
     if artifact:lines+=['',f'Prepared artifact: `{artifact.name}`. Download it from this run’s Artifacts section after upload.']
     lines+=['','Native builds run on Windows/macOS runners. No release or repository write is produced.']
