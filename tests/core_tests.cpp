@@ -3,6 +3,27 @@
 #include <cmath>
 Playback playing(){Playback p;p.active=true;p.track.identity="a";p.track.title="Local title";p.track.artist="Local artist";p.track.duration=180;p.position=60;p.epoch=1000;p.clock_revision=1;return p;}
 int main(){Suite s;
+ s.test("Listening headline uses the selected artist while details retain the song",[]{
+    for(unsigned source=0;source<4;++source)for(bool paused:{false,true}) {
+        Playback p;p.active=true;p.paused=paused;Metadata m;
+        if(source==0){p.track.title="Tagged song";p.track.artist="Tagged artist";m.title="Remote song";m.artist="Remote artist";}
+        if(source==1){m.title="Remote song";m.artist="Remote artist";}
+        if(source==2){p.track.fallback_title="Filename song";p.track.fallback_artist="Filename artist";}
+        PlaybackClock clock;auto activity=make_activity(p,m,clock);
+        const auto artist=source==0?"Tagged artist":source==1?"Remote artist":source==2?"Filename artist":"Unknown artist";
+        const auto title=source==0?"Tagged song":source==1?"Remote song":source==2?"Filename song":"Unknown track";
+        require(activity["type"]==2&&activity["status_display_type"]==1&&activity["name"]==artist&&activity["state"]==artist,"Listening headline did not use artist");
+        require(activity["details"]==title,"Headline change replaced the song detail row");
+    }
+ });
+ s.test("both video filename orders display correctly before metadata arrives",[]{
+    for(const std::string name:{"Alice In Chains - Man in the Box (Official Video) [TAqZb52sgpU].webm","Man in the Box (Official Video) [TAqZb52sgpU] - Alice In Chains.webm"}) {
+        Track t;apply_filename_fallback(t,name);Playback p;p.active=true;p.track=t;PlaybackClock clock;
+        auto initial=make_activity(p,{},clock);Metadata metadata;metadata.title="Man in the Box";metadata.artist="Alice in Chains";auto resolved=make_activity(p,metadata,clock);
+        require(initial["details"]=="Man in the Box"&&initial["state"]=="Alice In Chains","Guessed fields were swapped during lookup");
+        require(initial["details"]==resolved["details"],"Lookup changed song orientation");
+    }
+ });
  s.test("common track and disc prefixes supply clean filename hints",[]{
     for(const std::string filename:{"01 - Artist - Song.flac","01. Artist - Song.mp3","1) Artist - Song.ogg","01 Artist - Song.m4a","[01] Artist - Song.wav","[123] Artist - Song.ape","001 - Artist - Song.wv","1-02 Artist - Song.flac","1-02 - Artist - Song.flac","1.02 Artist - Song.flac","CD1-02 Artist - Song.flac","Disc 2-03 - Artist - Song.flac"}) {
         Track t;t.title=filename;apply_filename_fallback(t,filename);
@@ -29,7 +50,7 @@ int main(){Suite s;
     }
     for(const std::string marker:{"(Official Lyric Video)","[Official Lyric Video]","[Lyric Video]","[Lyrics]"}) {
         Track t;apply_filename_fallback(t,"Song "+marker+" [TAqZb52sgpU] [1080p] - Artist.webm");
-        require(t.fallback_title=="Artist"&&t.fallback_artist=="Song"&&t.filename_has_video_hint,"Stacked reversed decorations survived");
+        require(t.fallback_title=="Song"&&t.fallback_artist=="Artist"&&t.filename_has_video_hint,"Stacked reversed decorations survived");
     }
  });
  s.test("numeric names and meaningful song versions are preserved",[]{
@@ -71,7 +92,7 @@ int main(){Suite s;
     Track a,b;apply_filename_fallback(a,"Artist - Song.webm");apply_filename_fallback(b,"Artist - Song (Official Video).webm");
     require(a.fallback_title==b.fallback_title&&lookup_key(a)!=lookup_key(b)&&!same_lookup_inputs(a,b),"Video evidence omitted from lookup identity");
  });
- s.test("filename lookup cache version changes without invalidating tagged lookups",[]{Track t;apply_filename_fallback(t,"Song - Artist.flac");require(json::parse(lookup_key(t))[0]=="v4-video-album","Old one-order cache reused");t.title="Song";t.artist="Artist";require(json::parse(lookup_key(t))[0]=="v2"&&json::parse(lookup_key(t)).size()==13,"Tagged cache unnecessarily invalidated");});
+ s.test("filename lookup cache version changes without invalidating tagged lookups",[]{Track t;apply_filename_fallback(t,"Song - Artist.flac");require(json::parse(lookup_key(t))[0]=="v5-studio-artwork","Old one-order cache reused");t.title="Song";t.artist="Artist";require(json::parse(lookup_key(t))[0]=="v2"&&json::parse(lookup_key(t)).size()==13,"Tagged cache unnecessarily invalidated");});
  s.test("download filenames supply display hints without pretending to be tags",[]{Track t;apply_filename_fallback(t,"Alice In Chains - Man in the Box (Official Video) [TAqZb52sgpU].webm");require(t.title.empty()&&t.artist.empty(),"Filename became authoritative tags");require(t.fallback_title=="Man in the Box"&&t.fallback_artist=="Alice In Chains","Download filename not parsed");Playback p;p.active=true;p.track=t;PlaybackClock clock;auto a=make_activity(p,{},clock);require(a["details"]=="Man in the Box"&&a["state"]=="Alice In Chains","Offline filename hints not displayed");Metadata m;m.title="Man in the Box";m.artist="Alice in Chains";a=make_activity(p,m,clock);require(a["state"]=="Alice in Chains","Canonical artist did not override filename hint");});
  s.test("filename TITLE placeholders yield to recovered metadata",[]{for(const std::string name:{"Alice In Chains - Man in the Box (Official Video) [TAqZb52sgpU].webm","Alice In Chains - Man in the Box (Official Video) [TAqZb52sgpU]"}){Track t;t.title=name;apply_filename_fallback(t,"Alice In Chains - Man in the Box (Official Video) [TAqZb52sgpU].webm");require(t.title.empty()&&t.fallback_title=="Man in the Box","Filename placeholder kept precedence");}});
  s.test("filename hints preserve real tags and meaningful version suffixes",[]{Track tagged;tagged.title="Different song";tagged.artist="Tagged artist";apply_filename_fallback(tagged,"Alice In Chains - Man in the Box (Official Video) [TAqZb52sgpU].webm");require(tagged.title=="Different song"&&tagged.artist=="Tagged artist"&&tagged.fallback_artist.empty(),"Real tags replaced");for(const std::string version:{"Live","Remix","Acoustic"}){Track t;apply_filename_fallback(t,"Artist - Song ("+version+").flac");require(t.fallback_title=="Song ("+version+")","Version suffix removed");}Track plain;apply_filename_fallback(plain,"Song [Deluxe].flac");require(plain.fallback_title=="Song [Deluxe]"&&plain.fallback_artist.empty(),"Unstructured filename guessed");});

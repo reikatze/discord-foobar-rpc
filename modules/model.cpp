@@ -73,7 +73,7 @@ void apply_filename_fallback(Track& t,const std::string& filename) {
         std::smatch match;
         if(std::regex_match(stem,match,prefix)){stem=trim(match[1].str());break;}
     }
-    bool video_hint=false;
+    bool video_hint=false,title_label=false;
     auto clean_part=[&](std::string value) {
         // Decorations belong to either side of Artist - Song / Song - Artist.
         for(bool changed=true;changed;) {
@@ -88,7 +88,7 @@ void apply_filename_fallback(Track& t,const std::string& filename) {
             std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){return static_cast<char>(c<128?std::tolower(c):c);});
             for(const char* suffix:{" (official video)"," (official music video)"," (official audio)"," (official lyric video)"," (lyric video)"," (lyrics)"," [official video]"," [official music video]"," [official audio]"," [official lyric video]"," [lyric video]"," [lyrics]"}) {
                 const std::string ending=suffix;
-                if(lower.ends_with(ending)) {value=trim(value.substr(0,value.size()-ending.size()));video_hint=true;changed=true;break;}
+                if(lower.ends_with(ending)) {value=trim(value.substr(0,value.size()-ending.size()));video_hint=true;title_label=true;changed=true;break;}
             }
             if(changed)continue;
             for(const char* suffix:{" [hd]"," [hq]"," [4k]"," [1080p]"," [720p]"," [320kbps]"," [flac]"}) {
@@ -113,7 +113,12 @@ void apply_filename_fallback(Track& t,const std::string& filename) {
         if(placeholder)t.title.clear();
         t.fallback_title=title;t.filename_has_video_hint=video_hint;return;
     }
-    auto artist=clean_part(trim(stem.substr(0,separator))),title=clean_part(trim(stem.substr(separator+width)));
+    auto artist=clean_part(trim(stem.substr(0,separator)));
+    const bool left_title_label=title_label;title_label=false;
+    auto title=clean_part(trim(stem.substr(separator+width)));
+    // A title-specific video/lyric label gives an immediate orientation hint.
+    // An arbitrary ID or quality label alone does not establish the order.
+    if(left_title_label&&!title_label)std::swap(artist,title);
     if(artist.empty()||title.empty())return;
     auto compatible=[&](const std::string& candidate_artist,const std::string& candidate_title) {
         return (t.title.empty()||placeholder||normalized(t.title)==normalized(candidate_title))&&
@@ -130,7 +135,7 @@ std::string lookup_key(const Track& t) {
     // Full canonical key is retained in cache records to detect any filename hash collision.
     // Recheck filename results cached before per-side cleanup and video album matching.
     const bool filename=t.title.empty()&&t.artist.empty()&&!t.fallback_title.empty()&&!t.fallback_artist.empty();
-    const auto version=filename?"v4-video-album":"v2";
+    const auto version=filename?"v5-studio-artwork":"v2";
     auto key=json::array({version, normalized(t.recording_id), normalized(t.release_id), normalized(t.release_group_id),
         normalized(t.title), normalized(t.artist), normalized(t.album), normalized(t.album_artist),
         t.track_number, t.disc_number, std::isfinite(t.duration) && t.duration > 0 ? static_cast<long long>(t.duration) : 0,

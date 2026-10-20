@@ -1,13 +1,14 @@
 #pragma once
 #include "cache.h"
 #include "http.h"
+#include "diagnostics.h"
 #include <unordered_map>
 namespace music_tracker {
 class MusicBrainz {
 public:
     using Request = std::function<HttpResponse(const std::string&,const Cancelled&)>;
     struct Timing {std::function<MonoClock::time_point()> now;std::function<void(MonoClock::time_point,const Cancelled&)> wait;};
-    explicit MusicBrainz(MetadataCache& cache,Request requester={},Timing timing={}):cache_(cache),requester_(std::move(requester)),timing_(std::move(timing)){}
+    explicit MusicBrainz(MetadataCache& cache,Request requester={},Timing timing={},Diagnostics diagnostics={}):cache_(cache),requester_(std::move(requester)),timing_(std::move(timing)),diagnostics_(std::move(diagnostics)){}
     Metadata lookup(const Track& track,const Cancelled& cancelled);
     LookupResult lookup_result(const Track& track,const Cancelled& cancelled);
 private:
@@ -15,6 +16,9 @@ private:
     HttpClient http_;
     Request requester_;
     Timing timing_;
+    Diagnostics diagnostics_;
+    std::string log_scope_;
+    std::uint64_t lookup_sequence_=0;
     MonoClock::time_point now() const {return timing_.now?timing_.now():MonoClock::now();}
     HttpResponse get(const std::string& url,const Cancelled& cancelled);
     MonoClock::time_point next_request_{};

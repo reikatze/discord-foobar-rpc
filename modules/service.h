@@ -9,6 +9,7 @@
 #include <thread>
 namespace music_tracker {
 struct ServiceDependencies {
+    Diagnostics diagnostics;
     DiscordRPC::Dial dial;
     std::function<LookupResult(const Track&,const Cancelled&)> lookup;
 };
@@ -25,6 +26,7 @@ private:
     void lookup_worker();
     std::filesystem::path cache_folder_;
     ServiceDependencies dependencies_;
+    Diagnostics diagnostics_;
     mutable std::mutex mutex_;
     std::condition_variable presence_condition_,lookup_condition_;
     Settings settings_;

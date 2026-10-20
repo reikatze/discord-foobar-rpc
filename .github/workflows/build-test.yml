@@ -1,4 +1,4 @@
-name: Native addon tests and builds
+name: Native addon tests, sanitizers and builds
 on:
   push:
   pull_request:
@@ -9,20 +9,95 @@ concurrency:
   group: discord-foobar-rpc-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  windows:
+    name: Windows x86 and x64 / Release
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: python
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          arch: x86
+          cache-architectures: x86-x64
+      - name: Run workflow contract tests once
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          source = Path(os.environ['DMT_SOURCE'])
+          subprocess.run([sys.executable, str(source / 'tests/ci_contract_tests.py')], check=True)
+      - name: Test Windows x86
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          source = Path(os.environ['DMT_SOURCE'])
+          subprocess.run([sys.executable, str(source / 'tools/run.py'), 'test', '--source', str(source), '--configuration', 'Release'], check=True)
+      - name: Build Windows x86
+        id: addon_x86
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          source = Path(os.environ['DMT_SOURCE'])
+          subprocess.run([sys.executable, str(source / 'tools/run.py'), 'build', '--source', str(source), '--configuration', 'Release'], check=True)
+      - name: Prepare Windows x64 using common dependencies
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          source = Path(os.environ['DMT_SOURCE'])
+          subprocess.run([sys.executable, str(source / 'tools/prepare.py'), '--source', str(source), '--vcpkg', str(Path.cwd() / '.ci/vcpkg'), '--arch', 'x64', '--reuse-common'], check=True)
+      - name: Test Windows x64
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          source = Path(os.environ['DMT_SOURCE'])
+          subprocess.run([sys.executable, str(source / 'tools/run.py'), 'test', '--source', str(source), '--configuration', 'Release'], check=True)
+      - name: Build Windows x64
+        id: addon_x64
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          source = Path(os.environ['DMT_SOURCE'])
+          subprocess.run([sys.executable, str(source / 'tools/run.py'), 'build', '--source', str(source), '--configuration', 'Release'], check=True)
+      - name: Transfer Windows x86 input
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-input-${{ steps.addon_x86.outputs.artifact_name }}
+          path: ${{ steps.addon_x86.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+      - name: Transfer Windows x64 input
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-input-${{ steps.addon_x64.outputs.artifact_name }}
+          path: ${{ steps.addon_x64.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+      - name: Print Windows test diagnostics on failure
+        if: failure()
+        run: |
+          import os
+          from pathlib import Path
+          source = Path(os.environ.get('DMT_SOURCE', '.'))
+          for arch in ['x86', 'x64']:
+              for name in ['LastTest.log', 'LastTestsFailed.log']:
+                  file = source / ('out/tests-' + arch) / 'Testing/Temporary' / name
+                  if file.is_file():
+                      print(str(file))
+                      print(file.read_text(encoding='utf-8', errors='replace'))
   native:
     name: ${{ matrix.os }} / ${{ matrix.arch }} / ${{ matrix.configuration }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.os == 'macos-15-intel' && 90 || 60 }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-2022
-            arch: x86
-            configuration: Release
-          - os: windows-2022
-            arch: x64
-            configuration: Release
           - os: macos-15-intel
             arch: x64
             configuration: Release
@@ -42,12 +117,33 @@ jobs:
         with:
           arch: ${{ matrix.arch }}
       - name: Run offline suites and native IPC tests
+        id: offline
         run: |
           import os, subprocess, sys
           from pathlib import Path
           source = Path(os.environ['DMT_SOURCE'])
-          subprocess.run([sys.executable, str(source / 'tests/ci_contract_tests.py')], check=True)
           subprocess.run([sys.executable, str(source / 'tools/run.py'), 'test', '--source', str(source), '--configuration', '${{ matrix.configuration }}'], check=True)
+      - name: Run memory and undefined-behavior checks
+        if: matrix.os == 'macos-15-intel'
+        env:
+          # Apple Clang ASan does not support LeakSanitizer on this runner.
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          source = Path(os.environ['DMT_SOURCE'])
+          subprocess.run([sys.executable, str(source / 'tools/run.py'), 'test', '--source', str(source), '--configuration', 'Debug', '--sanitizer', 'address,undefined'], check=True)
+      - name: Run thread checks
+        # Still run TSan after an ASan failure, provided ordinary tests passed.
+        if: ${{ !cancelled() && matrix.os == 'macos-15-intel' && steps.offline.outcome == 'success' }}
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+        run: |
+          import os, subprocess, sys
+          from pathlib import Path
+          source = Path(os.environ['DMT_SOURCE'])
+          subprocess.run([sys.executable, str(source / 'tools/run.py'), 'test', '--source', str(source), '--configuration', 'Debug', '--sanitizer', 'thread'], check=True)
       - name: Build, inspect and stage native addon
         id: addon
         run: |
@@ -69,13 +165,15 @@ jobs:
           import os
           from pathlib import Path
           source = Path(os.environ.get('DMT_SOURCE', '.'))
-          for name in ['out/tests/Testing/Temporary/LastTest.log', 'out/tests/Testing/Temporary/LastTestsFailed.log']:
-              file = source / name
-              if file.is_file():
-                  print(file.read_text(encoding='utf-8', errors='replace'))
+          for folder in ['tests', 'tests-address-undefined', 'tests-thread']:
+              for name in ['LastTest.log', 'LastTestsFailed.log']:
+                  file = source / 'out' / folder / 'Testing/Temporary' / name
+                  if file.is_file():
+                      print(str(file))
+                      print(file.read_text(encoding='utf-8', errors='replace'))
   package:
     name: Single installable component
-    needs: native
+    needs: [windows, native]
     runs-on: macos-15
     timeout-minutes: 15
     permissions:

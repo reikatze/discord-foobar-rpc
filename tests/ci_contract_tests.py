@@ -21,6 +21,24 @@ prepare=load('prepare');runner=load('run')
 with patch.dict(sys.modules,{'run':runner}):packager=load('package')
 
 class CIContracts(unittest.TestCase):
+    def test_verbose_preference_is_wired_to_native_store_and_both_pages(self):
+        settings=(SOURCE/'modules/settings.cpp').read_text()
+        self.assertIn('cfg_bool verbose_logging(verbose_guid,false)',settings)
+        self.assertIn('static_cast<bool>(verbose_logging)',settings)
+        self.assertIn('verbose_logging=settings.verbose_logging',settings)
+        rc=(SOURCE/'platform/preferences.rc').read_text()
+        self.assertIn('Verbose diagnostic logging (foobar console)',rc)
+        self.assertIn('IDC_VERBOSE_LOGGING',rc)
+        windows=(SOURCE/'platform/preferences_windows.cpp').read_text()
+        self.assertIn('IDC_VERBOSE_LOGGING,BN_CLICKED,on_change',windows)
+        self.assertIn('IsDlgButtonChecked(IDC_VERBOSE_LOGGING)==BST_CHECKED',windows)
+        mac=(SOURCE/'platform/preferences_macos.mm').read_text()
+        self.assertIn('self.verboseLogging.state==NSControlStateValueOn',mac)
+        self.assertIn('self.verboseLogging.state=NSControlStateValueOff',mac)
+        adapter=(SOURCE/'modules/foobar.cpp').read_text()
+        self.assertIn('fb2k::inMainThread(std::move(task))',adapter)
+        self.assertIn('console::print(line.c_str())',adapter)
+
     def test_pinned_sdk_and_vcpkg(self):
         pins=json.loads((SOURCE/'tools/dependencies.json').read_text())
         self.assertEqual(len(pins['sdk']['sha256']),64)
@@ -90,15 +108,107 @@ class CIContracts(unittest.TestCase):
                     self.assertEqual((dest/'lib/x64'/config/'libcurl.lib').read_bytes(),b'curl')
                     self.assertEqual((dest/'lib/x64'/config/'zlib.lib').read_bytes(),sub.encode())
 
-    def test_apple_sanitizers_keep_checks_without_unsupported_leak_detection(self):
-        workflow=yaml.load((SOURCE/'.github/workflows/sanitizers.yml').read_text(),Loader=yaml.BaseLoader)
-        job=workflow['jobs']['sanitizers']
-        self.assertTrue(job['runs-on'].startswith('macos-'))
-        self.assertEqual(set(job['strategy']['matrix']['sanitizer']),{'address,undefined','thread'})
-        step=next(x for x in job['steps'] if x.get('name')=='Run sanitizer suites')
-        self.assertEqual(step['env']['ASAN_OPTIONS'],'detect_leaks=0:halt_on_error=1')
-        self.assertEqual(step['env']['UBSAN_OPTIONS'],'halt_on_error=1:print_stacktrace=1')
-        self.assertEqual(step['env']['TSAN_OPTIONS'],'halt_on_error=1')
+    def test_apple_sanitizers_share_native_runner_and_gate_artifacts(self):
+        self.assertFalse((SOURCE/'.github/workflows/sanitizers.yml').exists())
+        workflow=yaml.load((SOURCE/'.github/workflows/build-test.yml').read_text(),Loader=yaml.BaseLoader)
+        self.assertEqual(set(workflow['jobs']),{'windows','native','package'})
+        steps=workflow['jobs']['native']['steps']
+        memory=next(x for x in steps if x.get('name')=='Run memory and undefined-behavior checks')
+        thread=next(x for x in steps if x.get('name')=='Run thread checks')
+        build=next(x for x in steps if x.get('id')=='addon')
+        self.assertEqual(memory['if'],"matrix.os == 'macos-15-intel'")
+        self.assertIn("matrix.os == 'macos-15-intel'",thread['if'])
+        self.assertIn('!cancelled()',thread['if'])
+        self.assertIn("steps.offline.outcome == 'success'",thread['if'])
+        self.assertEqual(memory['env']['ASAN_OPTIONS'],'detect_leaks=0:halt_on_error=1')
+        self.assertEqual(memory['env']['UBSAN_OPTIONS'],'halt_on_error=1:print_stacktrace=1')
+        self.assertEqual(thread['env']['TSAN_OPTIONS'],'halt_on_error=1')
+        self.assertIn("'address,undefined'",memory['run'])
+        self.assertIn("'thread'",thread['run'])
+        self.assertLess(steps.index(memory),steps.index(thread))
+        self.assertLess(steps.index(thread),steps.index(build))
+        self.assertNotIn('if',build)
+        for step in [memory,thread]:self.assertNotIn('continue-on-error',step)
+        self.assertEqual(len([x for x in steps if x.get('uses')=='./.github/actions/setup']),1)
+        # Execute the actual embedded scripts with mocked subprocess calls.
+        for step,sanitizer in [(memory,'address,undefined'),(thread,'thread')]:
+            with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'DMT_SOURCE':tmp}),patch.object(prepare.subprocess,'run') as command:
+                exec(compile(step['run'],'sanitizer step','exec'),{})
+                args=command.call_args.args[0]
+                self.assertEqual(args[-4:],['--configuration','Debug','--sanitizer',sanitizer])
+                self.assertTrue(command.call_args.kwargs['check'])
+
+    def test_sanitizers_use_isolated_build_trees_and_reports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp);paths=[];reports=[]
+            for sanitizer in ['','address,undefined','thread']:
+                with patch.object(runner.sys,'platform','darwin'),patch.object(runner,'run') as command:
+                    report=runner.tests(source,{'installed':'deps'},'Debug',sanitizer)
+                    calls=[x.args[0] for x in command.call_args_list]
+                    paths.append(calls[0][calls[0].index('-B')+1]);reports.append(report)
+                    self.assertIn('-DMUSIC_SANITIZER='+sanitizer,calls[0])
+                    self.assertEqual(calls[1][2],paths[-1])
+                    self.assertEqual(calls[2][2],paths[-1])
+                    self.assertEqual(calls[2][-1],report)
+            self.assertEqual(len(set(paths)),3)
+            self.assertEqual(len(set(reports)),3)
+            self.assertTrue(reports[0].name=='test-results.xml')
+            with self.assertRaises(ValueError):runner.test_paths(source,'unexpected/path')
+
+    def test_windows_reuses_checkout_and_tools_but_tests_every_architecture(self):
+        workflow=yaml.load((SOURCE/'.github/workflows/build-test.yml').read_text(),Loader=yaml.BaseLoader)
+        job=workflow['jobs']['windows'];self.assertEqual(job['runs-on'],'windows-2022')
+        steps=job['steps'];names=[x.get('name','') for x in steps]
+        setup=[x for x in steps if x.get('uses')=='./.github/actions/setup']
+        self.assertEqual(len(setup),1);self.assertEqual(setup[0]['with']['arch'],'x86')
+        self.assertEqual(setup[0]['with']['cache-architectures'],'x86-x64')
+        action=yaml.load((SOURCE/'.github/actions/setup/action.yml').read_text(),Loader=yaml.BaseLoader)
+        cache=next(x for x in action['runs']['steps'] if x.get('uses')=='actions/cache@v4')
+        self.assertIn('inputs.cache-architectures || inputs.arch',cache['with']['key'])
+        order=['Run workflow contract tests once','Test Windows x86','Build Windows x86','Prepare Windows x64 using common dependencies','Test Windows x64','Build Windows x64']
+        self.assertEqual([names.index(x) for x in order],sorted(names.index(x) for x in order))
+        self.assertIn("'--arch', 'x64', '--reuse-common'",steps[names.index(order[3])]['run'])
+        for arch in ['x86','x64']:
+            upload=next(x for x in steps if x.get('name')=='Transfer Windows '+arch+' input')
+            self.assertNotIn('if',upload)
+            self.assertEqual(upload['with']['path'],'${{ steps.addon_'+arch+'.outputs.artifact_path }}')
+            self.assertEqual(upload['with']['name'],'native-input-${{ steps.addon_'+arch+'.outputs.artifact_name }}')
+            self.assertGreater(steps.index(upload),names.index('Build Windows x64'))
+        calls=[step for job in workflow['jobs'].values() for step in job['steps'] if 'ci_contract_tests.py' in step.get('run','')]
+        self.assertEqual(len(calls),1)
+
+    def test_windows_test_trees_do_not_mix_generator_architectures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp);folders=[];reports=[]
+            for arch,platform in [('x86','Win32'),('x64','x64')]:
+                state={'installed':'deps','arch':arch,'vcpkg':str(source/'vcpkg'),'triplet':arch+'-windows-static-md','installed_root':'installed'}
+                with patch.object(runner.sys,'platform','win32'),patch.object(runner,'run') as command:
+                    reports.append(runner.tests(source,state,'Release',''))
+                    args=command.call_args_list[0].args[0];folders.append(args[args.index('-B')+1])
+                    self.assertEqual(args[args.index('-A')+1],platform)
+            self.assertNotEqual(folders[0],folders[1]);self.assertNotEqual(reports[0],reports[1])
+
+    def test_common_dependencies_are_reused_only_after_verified_setup(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp);(source/'tools').mkdir();vcpkg=source/'vcpkg';vcpkg.mkdir()
+            pins={'vcpkg_commit':'fixture','sdk':{'url':'https://example.invalid/sdk.7z','sha256':'digest'}}
+            (source/'tools/dependencies.json').write_text(json.dumps(pins))
+            def extracted(archive,sdk):
+                header=sdk/'foobar2000/SDK/foobar2000.h';header.parent.mkdir(parents=True);header.write_text('fixture')
+            def command(args,**kwargs):
+                if 'bootstrap-vcpkg.bat' in str(args[0]):(vcpkg/'vcpkg.exe').write_bytes(b'fixture')
+            with patch.object(prepare.sys,'platform','win32'),patch.object(prepare.subprocess,'check_output',return_value='fixture'),patch.object(prepare,'verified_download') as download,patch.object(prepare,'extract_sdk',side_effect=extracted) as extract,patch.object(prepare,'run',side_effect=command) as run,patch.object(prepare,'patch_sdk_includes'),patch.object(prepare,'normalized_curl'):
+                for arch,reuse in [('x86',False),('x64',True)]:
+                    argv=['prepare','--source',str(source),'--vcpkg',str(vcpkg),'--arch',arch]+(['--reuse-common'] if reuse else [])
+                    with patch('sys.argv',argv):prepare.main()
+                self.assertEqual(download.call_count,1);self.assertEqual(extract.call_count,1)
+                calls=[x.args[0] for x in run.call_args_list]
+                self.assertEqual(sum('bootstrap-vcpkg.bat' in str(x[0]) for x in calls),1)
+                self.assertTrue(any('--triplet=x86-windows-static-md' in x for x in calls))
+                self.assertTrue(any('--triplet=x64-windows-static-md' in x for x in calls))
+                self.assertEqual(json.loads((source/'out/ci/state.json').read_text())['arch'],'x64')
+                (source/'tools/dependencies.json').write_text(json.dumps({**pins,'sdk':{**pins['sdk'],'sha256':'changed'}}))
+                with patch('sys.argv',argv),self.assertRaisesRegex(RuntimeError,'does not match'):prepare.main()
 
     def test_sdk_factory_classes_allow_sdk_inheritance(self):
         import re
@@ -129,8 +239,8 @@ class CIContracts(unittest.TestCase):
         self.assertEqual(workflow['permissions'],{'contents':'read'})
         self.assertEqual(set(workflow['on']),{'push','pull_request','workflow_dispatch'})
         entries=workflow['jobs']['native']['strategy']['matrix']['include']
-        self.assertEqual(len(entries),4)
-        self.assertEqual({(x['os'],x['arch'],x['configuration']) for x in entries},{(os,arch,config) for os,arch in [('windows-2022','x86'),('windows-2022','x64'),('macos-15-intel','x64'),('macos-15','arm64')] for config in ['Release']})
+        self.assertEqual(len(entries),2)
+        self.assertEqual({(x['os'],x['arch'],x['configuration']) for x in entries},{(os,arch,config) for os,arch in [('macos-15-intel','x64'),('macos-15','arm64')] for config in ['Release']})
         steps=workflow['jobs']['native']['steps'];names=[x.get('name','') for x in steps]
         self.assertLess(names.index('Run offline suites and native IPC tests'),names.index('Build, inspect and stage native addon'))
         setup=[x for x in steps if x.get('uses')=='./.github/actions/setup']
@@ -176,7 +286,7 @@ class CIContracts(unittest.TestCase):
     def test_single_package_job_waits_for_every_native_build(self):
         workflow=yaml.load((SOURCE/'.github/workflows/build-test.yml').read_text(),Loader=yaml.BaseLoader)
         job=workflow['jobs']['package']
-        self.assertEqual(job['needs'],'native')
+        self.assertEqual(set(job['needs']),{'windows','native'})
         self.assertNotIn('if',job)
         steps=job['steps']
         download=next(x for x in steps if x.get('uses')=='actions/download-artifact@v4')

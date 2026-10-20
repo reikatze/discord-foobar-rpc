@@ -22,7 +22,8 @@ json make_activity(const Playback& p, const Metadata& m, PlaybackClock& clock) {
     if (title.empty()) title="Unknown track";
     if (artist.empty()) artist="Unknown artist";
     // Discord owns the third row/progress rendering; timestamps provide elapsed and remaining time.
-    json activity={{"type",2},{"name",bounded_text(title)},{"status_display_type",2},
+    // Use the artist state for Discord's Listening status headline.
+    json activity={{"type",2},{"name",bounded_text(artist)},{"status_display_type",1},
         {"details",bounded_text(title)},{"state",bounded_text(artist)}};
     double duration = p.track.duration > 0 ? p.track.duration : m.duration;
     auto stamps=clock.timestamps(p,duration);

@@ -4,6 +4,9 @@ inputs:
   arch:
     description: Native architecture
     required: true
+  cache-architectures:
+    description: Architecture set sharing this job's dependency cache (defaults to arch)
+    default: ''
   native-build:
     description: Provision the foobar SDK and native build dependencies
     default: 'true'
@@ -37,7 +40,7 @@ runs:
         path: |
           .ci/vcpkg-cache
           .ci/vcpkg/downloads
-        key: dependencies-v1-${{ runner.os }}-${{ inputs.arch }}-${{ hashFiles('**/tools/dependencies.json', '**/tools/triplets/*.cmake') }}
+        key: dependencies-v1-${{ runner.os }}-${{ inputs.cache-architectures || inputs.arch }}-${{ hashFiles('**/tools/dependencies.json', '**/tools/triplets/*.cmake') }}
     - name: Provision dependencies
       shell: python
       env:

@@ -9,6 +9,7 @@ using MonoClock = std::chrono::steady_clock;
 struct Settings {
     bool enabled = true;
     std::string custom_application_id; // Empty means built-in. Never store the built-in ID here.
+    bool verbose_logging = false;
     bool operator==(const Settings&) const = default;
 };
 struct Track {

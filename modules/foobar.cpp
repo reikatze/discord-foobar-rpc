@@ -76,7 +76,11 @@ std::unique_ptr<PlaybackEvents> events;
 void start_component() {
     if(core_api::is_quiet_mode_enabled())return;
     try {
-        service=std::make_unique<Service>(select_cache_folder(),read_settings());
+        ServiceDependencies dependencies;
+        dependencies.diagnostics=Diagnostics(
+            [](const std::string& line){if(core_api::are_services_available())console::print(line.c_str());},
+            [](Diagnostics::Task task){fb2k::inMainThread(std::move(task));});
+        service=std::make_unique<Service>(select_cache_folder(),read_settings(),std::move(dependencies));
         events=std::make_unique<PlaybackEvents>();
     }catch(const std::exception&){events.reset();service.reset();console::print("discord-foobar-rpc: initialization failed; playback remains available.");}
 }

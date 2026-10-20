@@ -15,9 +15,12 @@ std::string literal(const std::string& value) {
     for(char c:bounded_text(value,512)){if(std::string("+-&|!(){}[]^\"~*?:\\/").find(c)!=std::string::npos)out+='\\';out+=c;}
     return out+'"';
 }
+std::string text_field(const json& value,const char* name) {
+    return value.is_object()&&value.contains(name)&&value[name].is_string()?value[name].get<std::string>():std::string{};
+}
 std::string id_of(const json& value) {
     if (!value.is_object())return {};
-    auto id=value.value("id",std::string{});return valid_mbid(id)?id:"";
+    auto id=text_field(value,"id");return valid_mbid(id)?id:"";
 }
 std::string credited(const json& value) {
     if(!value.is_object()||!value.contains("artist-credit"))return {};
@@ -32,59 +35,53 @@ void recording_metadata(const json& value,Metadata& result) {
     result.recording_id=id_of(value);result.title=value.value("title",std::string{});result.artist=credited(value);
     if(value.contains("length") && value["length"].is_number())result.duration=value["length"].get<double>()/1000.0;
 }
-const json* pick_recording(const json& rows,const Track& t) {
+const json* pick_recording(const json& rows,const Track& t,const std::function<void(const json&,const char*)>& rejected={}) {
     if(!rows.is_array())return nullptr;
     const auto title=normalized(t.title.empty()?t.fallback_title:t.title);
     const auto artist=normalized(t.artist),album=normalized(t.album);
     const json* best=nullptr;double best_score=-1,second=-1;
     for(const auto& row:rows) {
         const auto rank=score_of(row);
-        if(!row.is_object()||id_of(row).empty()||rank<90)continue;
-        if(title.empty()||title!=normalized(row.value("title",std::string{})))continue;
+        auto reject=[&](const char* reason){if(rejected)rejected(row,reason);};
+        if(!row.is_object()||id_of(row).empty()||rank<90){reject("invalid ID or search score below 90");continue;}
+        if(title.empty()||title!=normalized(row.value("title",std::string{}))){reject("title mismatch");continue;}
         // Without an artist, require album or duration context and a uniquely stronger candidate.
-        if(!artist.empty()&&artist!=normalized(credited(row)))continue;
+        if(!artist.empty()&&artist!=normalized(credited(row))){reject("artist mismatch");continue;}
         if(t.artist.empty()&&t.album.empty()) {
-            if(t.duration<=0||!row.contains("length")||!row["length"].is_number()||std::abs(row["length"].get<double>()/1000-t.duration)>5)continue;
+            if(t.duration<=0||!row.contains("length")||!row["length"].is_number()||std::abs(row["length"].get<double>()/1000-t.duration)>5){reject("missing or conflicting duration evidence");continue;}
         }
-        if(t.duration>0 && row.contains("length")&&row["length"].is_number() && std::abs(row["length"].get<double>()/1000-t.duration)>5)continue;
+        if(t.duration>0 && row.contains("length")&&row["length"].is_number() && std::abs(row["length"].get<double>()/1000-t.duration)>5){reject("duration mismatch");continue;}
         double score=rank;
         if(!t.album.empty()&&row.contains("releases")&&row["releases"].is_array()) {
             bool matches=false;for(const auto& r:row["releases"])if(!album.empty()&&album==normalized(r.value("title",std::string{})))matches=true;
-            if(!matches)continue;
+            if(!matches){reject("album mismatch");continue;}
             score+=15;
         }
         if(score>best_score){second=best_score;best_score=score;best=&row;}else second=std::max(second,score);
     }
-    if(second>=0 && best_score-second<3)return nullptr;
+    if(second>=0 && best_score-second<3){if(rejected&&best)rejected(*best,"ambiguous recording scores");return nullptr;}
     return best;
 }
-// Recording identity may be ambiguous while album artwork is unambiguous.
-// Require every candidate to agree on both names and exactly one studio album.
-std::string shared_studio_album(const std::vector<json>& rows) {
-    std::set<std::string> common;
-    bool first=true;
+// Recording identity can remain ambiguous while exactly one studio album is known.
+// Live/single/compilation appearances do not have to contain that studio album.
+std::string unique_studio_album(const std::vector<json>& rows) {
+    std::set<std::string> albums;
     for(const auto& row:rows) {
         if(!equal_name(row.value("title",std::string{}),rows.front().value("title",std::string{}))||
            !equal_name(credited(row),credited(rows.front())))return {};
-        std::set<std::string> albums;
         if(row.contains("releases")&&row["releases"].is_array())for(const auto& release:row["releases"]) {
-            if(!release.is_object()||normalized(release.value("status",std::string{}))!="official"||
+            if(!release.is_object()||normalized(text_field(release,"status"))!="official"||
                !release.contains("release-group")||!release["release-group"].is_object())continue;
             const auto& group=release["release-group"];
-            if(normalized(group.value("primary-type",group.value("type",std::string{})))!="album")continue;
+            auto type=text_field(group,"primary-type");if(type.empty())type=text_field(group,"type");
+            if(normalized(type)!="album")continue;
             if(group.contains("secondary-types")&&(!group["secondary-types"].is_array()||!group["secondary-types"].empty()))continue;
             if(auto id=id_of(group);!id.empty())albums.insert(id);
         }
-        if(first){common=std::move(albums);first=false;}
-        else {
-            std::set<std::string> intersection;
-            std::set_intersection(common.begin(),common.end(),albums.begin(),albums.end(),std::inserter(intersection,intersection.end()));
-            common=std::move(intersection);
-        }
-        if(common.empty())return {};
     }
-    return common.size()==1?*common.begin():std::string{};
+    return albums.size()==1?*albums.begin():std::string{};
 }
+
 void find_release_track(const json& release,const Track& t,Metadata& result) {
     if(!release.contains("media")||!release["media"].is_array())return;
     const bool has_recording=valid_mbid(t.recording_id);
@@ -179,7 +176,12 @@ json MusicBrainz::album_search(const std::string& query,const Cancelled& cancell
     return data;
 }
 HttpResponse MusicBrainz::get(const std::string& url,const Cancelled& cancelled) {
-    return requester_?requester_(url,cancelled):http_.get(url,cancelled);
+    diagnostics_.detail(log_scope_,"GET "+url);
+    try {
+        auto response=requester_?requester_(url,cancelled):http_.get(url,cancelled);
+        diagnostics_.detail(log_scope_,"HTTP "+std::to_string(response.status)+" "+url);return response;
+    } catch(const LookupCancelled&){throw;}
+    catch(const std::exception& error){diagnostics_.info(log_scope_,"Request failed: "+std::string(error.what()));throw;}
 }
 json MusicBrainz::request(const std::string& path,const Cancelled& cancelled) {
     if(timing_.wait)timing_.wait(next_request_,cancelled);else wait_until(next_request_,cancelled);
@@ -188,24 +190,25 @@ json MusicBrainz::request(const std::string& path,const Cancelled& cancelled) {
     next_request_=now()+std::chrono::milliseconds(1100);
     auto response=get("https://musicbrainz.org/ws/2/"+path,cancelled);
     check(cancelled);
-    if(response.status==404)return nullptr;
+    if(response.status==404){diagnostics_.detail(log_scope_,"MusicBrainz entity not found (HTTP 404)");return nullptr;}
     if(response.status==429||response.status==503) {
         unsigned seconds=60;
         try {seconds=static_cast<unsigned>(std::clamp(std::stol(response.retry_after),1L,3600L));}catch(...){}
         next_request_=std::max(next_request_,now()+std::chrono::seconds(seconds));
+        diagnostics_.info(log_scope_,"MusicBrainz HTTP "+std::to_string(response.status)+"; retry after "+std::to_string(seconds)+" seconds");
         throw std::runtime_error("MusicBrainz rate limited; retry later");
     }
-    if(response.status!=200)throw std::runtime_error("MusicBrainz unavailable");
+    if(response.status!=200)throw std::runtime_error("MusicBrainz HTTP "+std::to_string(response.status));
     return json::parse(response.body);
 }
 std::string MusicBrainz::cover(const std::string& kind,const std::string& id,const Cancelled& cancelled) {
     if(!valid_mbid(id))return {};
     const auto entity=kind+":"+id;
-    if(auto cached=cache_.artwork(entity))return *cached;
+    if(auto cached=cache_.artwork(entity)){diagnostics_.detail(log_scope_,"Artwork cache hit: "+entity+(cached->empty()?" (no cover)":" URL="+*cached));return *cached;}
     auto response=get("https://coverartarchive.org/"+kind+"/"+id,cancelled);
     check(cancelled);
-    if(response.status==404){cache_.put_artwork(entity,"");return {};}
-    if(response.status!=200)throw std::runtime_error("Cover Art Archive unavailable");
+    if(response.status==404){diagnostics_.info(log_scope_,"No hosted cover: "+entity+" (HTTP 404)");cache_.put_artwork(entity,"");return {};}
+    if(response.status!=200)throw std::runtime_error("Cover Art Archive HTTP "+std::to_string(response.status));
     auto data=json::parse(response.body);std::string url;
     if(data.contains("images")&&data["images"].is_array()) {
         for(const auto& image:data["images"]) {
@@ -219,12 +222,16 @@ std::string MusicBrainz::cover(const std::string& kind,const std::string& id,con
             url.clear();
         }
     }
+    diagnostics_.detail(log_scope_,url.empty()?"No usable HTTPS front cover: "+entity:"Selected artwork URL: "+url);
     cache_.put_artwork(entity,url);return url;
 }
 Metadata MusicBrainz::lookup(const Track& t,const Cancelled& cancelled) {return lookup_result(t,cancelled).metadata;}
 LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelled) {
+    log_scope_="MusicBrainz #"+std::to_string(++lookup_sequence_)+" "+bounded_text(t.title.empty()?t.fallback_title:t.title,100)+" / "+bounded_text(t.artist.empty()?t.fallback_artist:t.artist,100);
     check(cancelled);const auto key=t.cache_key.empty()?lookup_key(t):t.cache_key;
-    if(auto cached=cache_.get_record(key))return *cached;
+    if(auto cached=cache_.get_record(key)){diagnostics_.detail(log_scope_,"Metadata cache hit");return *cached;}
+    unsigned rejection_count=0;
+    auto rejected=[&](const json& row,const char* reason){++rejection_count;diagnostics_.detail(log_scope_,"Rejected candidate "+id_of(row)+" "+text_field(row,"title")+" / "+credited(row)+": "+reason);};
     auto batch=cache_.batch();
     Metadata result;json recording=nullptr,release=nullptr;
     if(valid_mbid(t.release_id))result.release_id=t.release_id;
@@ -298,33 +305,74 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
             auto data=request("recording/?query="+url_encode(query)+"&limit=10&fmt=json",cancelled);
             if(!data.is_object()||!data.contains("recordings")||!data["recordings"].is_array())continue;
             if(!filename_orders) {
-                if(auto match=pick_recording(data["recordings"],interpretation))verified=*match;
+                if(auto match=pick_recording(data["recordings"],interpretation,rejected))verified=*match;
                 continue;
             }
             // Compare exact names first; duration is evidence, not a video-edit veto.
             for(const auto& row:data["recordings"]) {
                 auto names=interpretation;names.duration=0;
                 auto single=json::array({row});
-                if(!pick_recording(single,names))continue;
+                if(!pick_recording(single,names,rejected))continue;
                 const auto id=id_of(row);
                 exact.emplace(id,row);
                 if(!std::isfinite(t.duration)||t.duration<=0)duration_matches.emplace(id,row);
                 else if(row.contains("length")&&row["length"].is_number()) {
                     const auto seconds=row["length"].get<double>()/1000.0;
                     if(std::isfinite(seconds)&&std::abs(seconds-t.duration)<=5)duration_matches.emplace(id,row);
-                }
+                    else if(!t.filename_has_video_hint)rejected(row,"duration mismatch");
+                    else diagnostics_.detail(log_scope_,"Candidate "+id+": video duration differs; retaining exact names");
+                } else if(!t.filename_has_video_hint)rejected(row,"missing duration evidence");
             }
         }
         if(filename_orders) {
-            const auto& pool=duration_matches.empty()&&t.filename_has_video_hint?exact:duration_matches;
+            auto pool=t.filename_has_video_hint?exact:duration_matches;
+            if(t.filename_has_video_hint&&!duration_matches.empty()) {
+                // Video runtime can establish the name order, but a live rendition
+                // of that length must not hide the song's original studio album.
+                const auto& evidence=duration_matches.begin()->second;
+                bool one_order=true;
+                for(const auto& entry:duration_matches)
+                    if(!equal_name(entry.second.value("title",std::string{}),evidence.value("title",std::string{}))||
+                       !equal_name(credited(entry.second),credited(evidence)))one_order=false;
+                if(one_order)for(auto it=pool.begin();it!=pool.end();) {
+                    if(!equal_name(it->second.value("title",std::string{}),evidence.value("title",std::string{}))||
+                       !equal_name(credited(it->second),credited(evidence)))it=pool.erase(it);
+                    else ++it;
+                }
+            }
+            bool same_names=!pool.empty();
+            for(const auto& entry:pool)if(!equal_name(entry.second.value("title",std::string{}),pool.begin()->second.value("title",std::string{}))||
+                !equal_name(credited(entry.second),credited(pool.begin()->second)))same_names=false;
+            bool albums_complete=true;unsigned details_left=6;
+            if(same_names) {
+                // Search responses can omit release status/type information.
+                for(auto& entry:pool)if(entry.second.contains("releases")&&entry.second["releases"].is_array())
+                    for(auto& edition:entry.second["releases"]) {
+                        if(!edition.is_object()||id_of(edition).empty())continue;
+                        const bool missing=!edition.contains("status")||!edition.contains("release-group")||
+                            !edition["release-group"].is_object()||
+                            (!edition["release-group"].contains("primary-type")&&!edition["release-group"].contains("type"));
+                        if(!missing)continue;
+                        if(!details_left){albums_complete=false;continue;}
+                        --details_left;
+                        auto detail=release_detail(id_of(edition),false,cancelled);
+                        if(detail.is_object())edition.update(detail);
+                        if(!detail.is_object()||text_field(edition,"status").empty()||!edition.contains("release-group")||
+                           (text_field(edition["release-group"],"primary-type").empty()&&text_field(edition["release-group"],"type").empty()))albums_complete=false;
+                    }
+                result.title=pool.begin()->second.value("title",std::string{});
+                result.artist=credited(pool.begin()->second);
+            }
+
             if(pool.size()==1)verified=pool.begin()->second;
             else if(!pool.empty()) {
                 std::vector<json> candidates;for(const auto& entry:pool)candidates.push_back(entry.second);
-                const auto album_id=shared_studio_album(candidates);
+                const auto album_id=albums_complete?unique_studio_album(candidates):std::string{};
                 if(!album_id.empty()) {
                     result.title=candidates.front().value("title",std::string{});
                     result.artist=credited(candidates.front());
                     result.release_group_id=album_id;
+                    diagnostics_.detail(log_scope_,"Selected unique studio album group "+album_id);
                     // No recording ID or remote duration is invented for agreeing editions.
                 }
             }
@@ -332,7 +380,7 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
         if(!verified.is_null()) {
             recording=verified;recording_metadata(recording,result);
             if(filename_orders&&t.album.empty()&&result.release_group_id.empty()) {
-                const auto studio=shared_studio_album({recording});
+                const auto studio=unique_studio_album({recording});
                 if(!studio.empty()) {
                     result.release_group_id=studio;
                     json editions=json::array();
@@ -344,6 +392,7 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
             }
         }
     }
+    if(rejection_count)diagnostics_.info(log_scope_,"Rejected "+std::to_string(rejection_count)+" search candidates");
     // Resolve releases belonging to the verified recording, preferring a tagged album.
     std::vector<std::string> artwork_releases;
     if(!result.release_id.empty())artwork_releases.push_back(result.release_id);
@@ -378,11 +427,11 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
     }
     bool artwork_failed=false;
     for(const auto& id:artwork_releases) {
-        try {result.artwork_url=cover("release",id,cancelled);}catch(const LookupCancelled&){throw;}catch(const std::exception&){artwork_failed=true;}
+        try {result.artwork_url=cover("release",id,cancelled);}catch(const LookupCancelled&){throw;}catch(const std::exception& error){diagnostics_.info(log_scope_,"Artwork lookup failed: "+std::string(error.what()));artwork_failed=true;}
         if(!result.artwork_url.empty())break;
     }
     if(result.artwork_url.empty()&&!result.release_group_id.empty()) {
-        try {result.artwork_url=cover("release-group",result.release_group_id,cancelled);}catch(const LookupCancelled&){throw;}catch(const std::exception&){artwork_failed=true;}
+        try {result.artwork_url=cover("release-group",result.release_group_id,cancelled);}catch(const LookupCancelled&){throw;}catch(const std::exception& error){diagnostics_.info(log_scope_,"Artwork lookup failed: "+std::string(error.what()));artwork_failed=true;}
     }
     if(!result.recording_id.empty())result.page_url="https://musicbrainz.org/recording/"+result.recording_id;
     else if(!result.release_id.empty())result.page_url="https://musicbrainz.org/release/"+result.release_id;

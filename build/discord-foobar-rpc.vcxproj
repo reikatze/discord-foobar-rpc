@@ -78,6 +78,7 @@
     <ClInclude Include="..\modules\foobar.h" />
     <ClInclude Include="..\modules\http.h" />
     <ClInclude Include="..\modules\model.h" />
+    <ClInclude Include="..\modules\diagnostics.h" />
     <ClInclude Include="..\modules\musicbrainz.h" />
     <ClInclude Include="..\modules\presence.h" />
     <ClInclude Include="..\modules\service.h" />

@@ -10,7 +10,9 @@ namespace music_tracker {
 namespace {
 const GUID enabled_guid={0x46c37cd9,0x5bba,0x4ea1,{0x91,0x26,0x00,0xad,0x3a,0x56,0x04,0x60}};
 const GUID app_guid={0x0a17ecc1,0xf916,0x42e2,{0x84,0x7b,0x97,0x31,0x62,0x30,0x74,0x9b}};
+const GUID verbose_guid={0x7489c0e3,0xb7da,0x4b81,{0x98,0xa9,0x51,0x62,0x90,0x24,0x2c,0x18}};
 cfg_bool enabled(enabled_guid,true);
+cfg_bool verbose_logging(verbose_guid,false);
 cfg_string custom_id(app_guid,"");
 bool writable(const std::filesystem::path& folder) {
     if(folder.empty())return false;
@@ -25,8 +27,8 @@ bool writable(const std::filesystem::path& folder) {
 namespace {
 class FoobarSettingsStore final : public SettingsStore {
 public:
-    Settings read() override {pfc::string8 id;custom_id.get(id);return {static_cast<bool>(enabled),id.c_str()};}
-    void write(const Settings& settings) override {enabled=settings.enabled;custom_id=settings.custom_application_id.c_str();}
+    Settings read() override {pfc::string8 id;custom_id.get(id);return {static_cast<bool>(enabled),id.c_str(),static_cast<bool>(verbose_logging)};}
+    void write(const Settings& settings) override {enabled=settings.enabled;custom_id=settings.custom_application_id.c_str();verbose_logging=settings.verbose_logging;}
 };
 }
 Settings read_settings(){FoobarSettingsStore store;return store.read();}

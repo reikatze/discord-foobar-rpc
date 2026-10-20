@@ -59,7 +59,7 @@ The song name is chosen in this order:
 
 The artist uses the file's artist tag first, followed by verified MusicBrainz metadata. If neither is available, the addon shows `Unknown artist`.
 
-The activity has the song above the artist, for example:
+The status headline is `Listening to <artist>`. The activity card keeps the song above the artist, for example:
 
 ```text
 Example Song
@@ -98,7 +98,7 @@ When tags are missing, filename hints support the following patterns:
 
 Official video/audio/lyric labels, conventional video IDs, and recognized bracketed quality labels are removed from search hints. Live, remix, acoustic, remaster, featured-artist and other version information is preserved. Bare hyphens and ordinary underscores remain part of names. Numeric artists such as `311` and titles such as `1979` are preserved.
 
-Real tags take precedence and can establish which side is the artist. Otherwise both orders are checked against MusicBrainz. Track/disc prefixes are hints only; they do not create tags or identify an album. Title-only files need additional evidence such as duration to recover an artist. Ambiguous matches can remain unresolved, and artwork depends on available metadata and cover art.
+Real tags take precedence and can establish which side is the artist. A video or lyric label attached to just one side supplies an immediate song-title orientation hint; otherwise both orders remain possible. Both orders are checked against MusicBrainz. Track/disc prefixes are hints only; they do not create tags or identify an album. Title-only files need additional evidence such as duration to recover an artist. Ambiguous matches can remain unresolved, and artwork depends on available metadata and cover art.
 
 ## Cache, requests, and artwork
 
@@ -121,6 +121,10 @@ Cache records contain metadata and artwork URLs, not downloaded images. Complete
 
 Release details, release-group details, and album searches also share a bounded memory cache: up to 64 entries, at most 256 KiB each. Positive entries expire after 24 hours; empty album searches after one hour. Complete local fields use smaller release summaries, with track details requested when missing fields need them.
 
+Stopping or disabling presence sends a clear before processing pending Discord replies, then closes the IPC session. The addon stays disconnected while inactive. Routine hover-clock changes share the 30-second presence refresh, while changes to the song, playback state, or artwork are coalesced separately.
+
+For filename matches, several recordings can agree on one studio album even when live or compilation versions exist. Sparse release summaries are enriched with at most six release-detail lookups per search. Different studio albums or conflicting song/artist pairs remain unresolved. Component status distinguishes a missing album match, missing hosted artwork, and a failed network request.
+
 MusicBrainz requests are serialized at least 1.1 seconds apart and respect rate-limit backoff. Requests have deadlines, size limits, HTTPS-only redirects, and cancellation checks. Metadata lookup and Discord communication run on separate workers. Cache maintenance is batched per lookup, and metadata refresh follows the cached result's expiry instead of rereading it every minute.
 
 Discord connection checks reuse encoded presence data. Playing hover text is formatted once per second while IPC health checks continue every 200 ms. Presence changes are coalesced, and stopping or disabling clears activity on the worker's next wake. Network failures preserve basic presence from local tags.
@@ -128,6 +132,14 @@ Discord connection checks reuse encoded presence data. Playing hover text is for
 Artwork comes directly from Cover Art Archive's hosted front-cover URLs. There is no third-party image-fitting proxy; Discord may crop an image to its card layout.
 
 To test matching from scratch, close foobar2000 and remove only the addon's `metadata-cache` directory before reopening it.
+
+## Console diagnostics
+
+Open Preferences → Tools → discord-foobar-rpc and enable **Verbose diagnostic logging (foobar console)**, then Apply. The setting defaults to off, persists in the foobar profile, and can be changed during playback without restarting metadata lookup. Defaults restores normal logging.
+
+Normal console messages include lookup failures, rejected-candidate counts, selected albums and identifiers, artwork outcomes, Discord connection changes, and Discord error codes/messages. Verbose mode additionally includes candidate rejection reasons, request URLs and HTTP statuses, cache hits, selected artwork URLs, sent activity details, and Discord acknowledgments. Messages use a component prefix and track/lookup context. Cancelled lookups are verbose events, not failures.
+
+Worker threads enqueue messages for a bounded main-thread console batch. Repeated identical messages are suppressed for 30 seconds; a full queue reports omitted messages. No log files are written. A successful Discord acknowledgment means the command was accepted, not that the artwork rendered on screen.
 
 ## Troubleshooting
 

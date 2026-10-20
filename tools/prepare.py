@@ -66,17 +66,27 @@ def normalized_curl(installed,destination,platform):
             shutil.copy2(selected[0],folder/target)
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path,required=True);parser.add_argument('--vcpkg',type=Path,required=True);parser.add_argument('--arch',choices=['x86','x64','arm64'],required=True);parser.add_argument('--tests-only',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--source',type=Path,required=True);parser.add_argument('--vcpkg',type=Path,required=True);parser.add_argument('--arch',choices=['x86','x64','arm64'],required=True);parser.add_argument('--tests-only',action='store_true');parser.add_argument('--reuse-common',action='store_true');args=parser.parse_args()
     source=args.source.resolve();vcpkg=args.vcpkg.resolve();pins=json.loads((source/'tools/dependencies.json').read_text())
     actual=subprocess.check_output(['git','-C',str(vcpkg),'rev-parse','HEAD'],text=True).strip()
     if actual!=pins['vcpkg_commit']:raise RuntimeError('Unexpected vcpkg checkout revision')
     windows=sys.platform=='win32';triplet=args.arch+('-windows-static-md' if windows else '-osx')
     dependencies=source/'third_party';sdk=dependencies/'foobar-sdk';archive=dependencies/'downloads'/'foobar-sdk.7z'
-    if not args.tests_only:
+    common_file=source/'out/ci/common-dependencies.json'
+    common={'vcpkg_commit':actual,'sdk_sha256':pins.get('sdk',{}).get('sha256',''),'platform':sys.platform,'native':not args.tests_only}
+    if args.reuse_common:
+        if not common_file.is_file() or json.loads(common_file.read_text())!=common:
+            raise RuntimeError('Common dependency setup is missing or does not match pinned inputs')
+        if not args.tests_only and not (sdk/'foobar2000/SDK/foobar2000.h').is_file():
+            raise RuntimeError('Common foobar SDK is missing')
+        if not (vcpkg/('vcpkg.exe' if windows else 'vcpkg')).is_file():
+            raise RuntimeError('Common vcpkg tool is missing')
+    elif not args.tests_only:
         verified_download(pins['sdk']['url'],archive,pins['sdk']['sha256'])
         extract_sdk(archive,sdk)
-    if windows:run([vcpkg/'bootstrap-vcpkg.bat','-disableMetrics'],shell=True)
-    else:run(['sh',vcpkg/'bootstrap-vcpkg.sh','-disableMetrics'])
+    if not args.reuse_common:
+        if windows:run([vcpkg/'bootstrap-vcpkg.bat','-disableMetrics'],shell=True)
+        else:run(['sh',vcpkg/'bootstrap-vcpkg.sh','-disableMetrics'])
     installed_root=dependencies/'vcpkg-installed'
     packages=['nlohmann-json']+(['curl[core,ssl]']+([] if args.tests_only else ['wtl']) if windows else [])
     command=[vcpkg/('vcpkg.exe' if windows else 'vcpkg'),'install',*packages,'--triplet='+triplet,'--x-install-root='+str(installed_root),'--disable-metrics']
@@ -89,5 +99,6 @@ def main():
     state={'source':str(source),'sdk':str(sdk),'vcpkg':str(vcpkg),'installed':str(installed),'installed_root':str(installed_root),'triplet':triplet,'arch':args.arch,'json_include':str(installed/'include')}
     (source/'out/ci').mkdir(parents=True,exist_ok=True)
     (source/'out/ci/state.json').write_text(json.dumps(state,indent=2))
+    common_file.write_text(json.dumps(common,indent=2))
 
 if __name__=='__main__':main()

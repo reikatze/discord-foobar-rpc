@@ -25,12 +25,20 @@ def msbuild():
     if not value:raise RuntimeError('MSBuild not found')
     return value[0]
 
+def test_paths(source,sanitizer,arch=""):
+    if sanitizer not in {'','address,undefined','thread'}:
+        raise ValueError('Unsupported sanitizer: '+sanitizer)
+    if arch not in {'','x86','x64','arm64'}:raise ValueError('Unsupported test architecture')
+    suffix=('-'+arch if arch else '')+('-'+sanitizer.replace(',','-') if sanitizer else '')
+    return source/('out/tests'+suffix),source/('out/ci/test-results'+suffix+'.xml')
+
 def tests(source,state,config,sanitizer):
-    folder=source/'out/tests';command=['cmake','-S',source/'tests','-B',folder,'-DCMAKE_BUILD_TYPE='+config,'-DCMAKE_PREFIX_PATH='+state['installed']]
+    folder,report=test_paths(source,sanitizer,state['arch'] if sys.platform=='win32' else '')
+    command=['cmake','-S',source/'tests','-B',folder,'-DCMAKE_BUILD_TYPE='+config,'-DCMAKE_PREFIX_PATH='+state['installed']]
     if sys.platform=='win32':command+=['-A','Win32' if state['arch']=='x86' else 'x64','-DCMAKE_TOOLCHAIN_FILE='+str(Path(state['vcpkg'])/'scripts/buildsystems/vcpkg.cmake'),'-DVCPKG_TARGET_TRIPLET='+state['triplet'],'-DVCPKG_INSTALLED_DIR='+state['installed_root'],'-DVCPKG_MANIFEST_MODE=OFF']
-    if sanitizer:command+=['-DMUSIC_SANITIZER='+sanitizer]
+    command+=['-DMUSIC_SANITIZER='+sanitizer]
     run(command);run(['cmake','--build',folder,'--config',config,'--parallel','2'])
-    report=source/'out/ci/test-results.xml'
+    report.parent.mkdir(parents=True,exist_ok=True)
     run(['ctest','--test-dir',folder,'--build-config',config,'--output-on-failure','--timeout','30','--output-junit',report])
     return report
 
@@ -122,7 +130,7 @@ def summary(source,report=None,output=None,artifact=None):
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('operation',choices=['test','build','summary']);parser.add_argument('--source',type=Path,required=True);parser.add_argument('--configuration',choices=['Debug','Release'],default='Debug');parser.add_argument('--sanitizer',default='');args=parser.parse_args();source=args.source.resolve()
-    state=json.loads((source/'out/ci/state.json').read_text());report=source/'out/ci/test-results.xml'
+    state=json.loads((source/'out/ci/state.json').read_text());_,report=test_paths(source,args.sanitizer,state['arch'] if sys.platform=='win32' else '')
     if args.operation=='test':
         try:tests(source,state,args.configuration,args.sanitizer)
         finally:summary(source,report=report)

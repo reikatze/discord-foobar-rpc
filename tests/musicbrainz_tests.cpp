@@ -24,6 +24,38 @@ HttpResponse ordinary(const std::string& url){
 Track identified(){Track t;t.recording_id=recording;t.release_id=release;t.duration=180;return t;}
 }
 int main(){Suite s;
+ s.test("sparse studio and live recording search results recover one studio album",[]{
+    TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;Track t;t.duration=286;apply_filename_fallback(t,"Man in the Box (Official Video) [TAqZb52sgpU] - Alice In Chains.webm");unsigned details=0;
+    const std::string live_recording="44444444-4444-4444-8444-444444444444",live_release="55555555-5555-4555-8555-555555555555",live_group="66666666-6666-4666-8666-666666666666";
+    f.response=[&](const std::string& url){
+        if(url.find("recording/?query=")!=std::string::npos) {
+            json rows=json::array();
+            if(url.find("recording%3A%22Man%20in%20the%20Box%22")!=std::string::npos)for(bool live:{false,true})
+                rows.push_back({{"id",live?live_recording:recording},{"score",100},{"title","Man in the Box"},{"length",live?286000:270000},{"artist-credit",credits("Alice in Chains")},{"releases",json::array({{{"id",live?live_release:release},{"title",live?"Live album":"Facelift"}}})}});
+            return ok({{"recordings",rows}});
+        }
+        if(url.starts_with("https://musicbrainz.org/ws/2/release/")) {
+            ++details;const bool live=url.find(live_release)!=std::string::npos;
+            return ok({{"id",live?live_release:release},{"title",live?"Live album":"Facelift"},{"status","Official"},{"release-group",{{"id",live?live_group:group},{"primary-type","Album"},{"secondary-types",live?json::array({"Live"}):json::array()}}}});
+        }
+        if(url.starts_with("https://musicbrainz.org/ws/2/release-group/"))return ok({{"id",group},{"title","Facelift"}});
+        require(url.find(live_group)==std::string::npos,"Live artwork selected");return ordinary(url);
+    };
+    MusicBrainz mb(cache,f.request(),f.timing());auto m=mb.lookup(t,[]{return false;});
+    require(details==2&&m.title=="Man in the Box"&&m.artist=="Alice in Chains"&&m.album=="Facelift"&&m.recording_id.empty()&&!m.artwork_url.empty(),"Live recording blocked studio artwork consensus");
+ });
+ s.test("nullable release types preserve verified text without selecting an album",[]{
+    TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;Track t;apply_filename_fallback(t,"Artist - Song (Official Video).webm");
+    f.response=[&](const std::string& url){
+        if(url.find("recording/?query=")!=std::string::npos) {
+            json rows=json::array();if(url.find("recording%3A%22Song%22")!=std::string::npos)for(bool second:{false,true})
+                rows.push_back({{"id",second?release:recording},{"score",100},{"title","Song"},{"artist-credit",credits("Artist")},{"releases",json::array({{{"id",group},{"status","Official"},{"release-group",{{"id",group},{"primary-type",nullptr},{"type",nullptr},{"secondary-types",nullptr}}}}})}});
+            return ok({{"recordings",rows}});
+        }
+        throw std::runtime_error("Unexpected nullable-type lookup");
+    };
+    MusicBrainz mb(cache,f.request(),f.timing());auto m=mb.lookup(t,[]{return false;});require(m.title=="Song"&&m.artist=="Artist"&&m.artwork_url.empty(),"Nullable types lost text or selected artwork");
+ });
  s.test("common filename patterns resolve canonical presence and artwork",[]{
     for(const std::string filename:{"01 - Artist - Song.flac","Song \xE2\x80\x93 Artist [HQ].MP3","Disc1-02 Artist - Song [FLAC].wv","[02] Artist_-_Song.m4a","02. Artist \xE2\x80\x94 Song (Official Lyric Video) [TAqZb52sgpU].webm"}) {
         TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;Track t;t.title=filename;t.duration=180;apply_filename_fallback(t,filename);unsigned searches=0;
@@ -182,7 +214,7 @@ int main(){Suite s;
             }
             return ok({{"recordings",rows}});
         };
-        MusicBrainz mb(cache,f.request(),f.timing());auto m=mb.lookup(t,[]{return false;});require(m.artwork_url.empty()&&m.title.empty(),"Conflicting album evidence accepted");
+        MusicBrainz mb(cache,f.request(),f.timing());auto m=mb.lookup(t,[]{return false;});require(m.artwork_url.empty()&&m.recording_id.empty(),"Conflicting album evidence accepted");
     }
  });
  s.test("studio album preferred over compilation releases for a unique video match",[]{

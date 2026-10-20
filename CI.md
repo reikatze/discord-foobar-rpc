@@ -2,11 +2,11 @@
 
 ## Workflow installation
 
-The downloadable source ZIP already places `.github/` at its repository root. For manual integration, copy the entire `Source/.github/` directory to the repository root's `.github/`, including workflows and `.github/actions/setup/`. GitHub ignores workflow files nested under Source. The scripts automatically find one source root at the repository root, `Source/`, `discord-foobar-rpc/Source/`, or `Discord Music Tracker/Source/`.
+For manual integration, copy the entire `Source/.github/` directory to the repository root's `.github/`, including workflows and `.github/actions/setup/`. GitHub ignores workflow files nested under Source. The scripts automatically find one source root at the repository root, `Source/`, `discord-foobar-rpc/Source/`, or `Discord Music Tracker/Source/`.
 
 Native Windows and macOS project files live under `build/`; automation scripts, dependency pins and triplets live under `tools/`.
 
-Both workflows trigger on push, pull request and manual dispatch. Permissions are `contents: read`. Pull-request code runs on ordinary `pull_request`, not a privileged `pull_request_target` event. Native jobs transfer verified build inputs to a final macOS packaging job. That job publishes one `discord-foobar-rpc.fb2k-component` artifact and removes the temporary input artifacts after successful upload. Only the packaging job has `actions: write`, solely to remove those intermediate artifacts. There are no publish, release, push or repository-write steps.
+The combined workflow triggers on push, pull request and manual dispatch. Permissions are `contents: read`. Pull-request code runs on ordinary `pull_request`, not a privileged `pull_request_target` event. Native jobs transfer verified build inputs to a final macOS packaging job. That job publishes one `discord-foobar-rpc.fb2k-component` artifact and removes the temporary input artifacts after successful upload. Only the packaging job has `actions: write`, solely to remove those intermediate artifacts. There are no publish, release, push or repository-write steps.
 
 ## Build matrix
 
@@ -17,7 +17,9 @@ Both workflows trigger on push, pull request and manual dispatch. Permissions ar
 | macos-15-intel | x86_64 | Release | `foo_discord_foobar_rpc.component` |
 | macos-15 | arm64 | Release | `foo_discord_foobar_rpc.component` |
 
-Each job runs 21 Python CI-helper contract tests and seven CTest executables, then builds the native addon. Tests must pass before the addon build runs. Mac sanitizer jobs additionally run AddressSanitizer/UndefinedBehaviorSanitizer or ThreadSanitizer on the production core and tests.
+Each native architecture runs eight CTest executables, then builds the native addon. Tests must pass before the addon build runs. The 26 Python CI-helper contract tests run once, at the start of the Windows job. The Windows job builds and tests x86 followed by x64, sharing checkout, SDK extraction, vcpkg bootstrap, and the dependency cache. Architecture-specific libraries are still installed for each target, and the combined Windows dependency cache stores both architectures under its own key so an old x86-only cache cannot prevent x64 reuse. A verified common-setup marker prevents reusing missing or mismatched dependencies. Windows test directories and reports include the architecture, avoiding CMake generator conflicts.
+
+The Intel Mac job additionally runs AddressSanitizer/UndefinedBehaviorSanitizer and ThreadSanitizer sequentially on the production core and all tests, reusing its dependency setup. Each pass has its own build directory and JUnit report. TSan still runs after an ASan failure when ordinary tests passed; either sanitizer failure prevents the native build and final packaging.
 
 Windows uses the official SDK library project references and Visual Studio 2022/MSBuild. macOS uses the SDK library projects in the workspace and a shared component scheme. Build inspection checks the real exported `foobar2000_get_interface` entrypoint; Windows inspection also checks the DLL architecture/type. Mac inspection checks architecture and verifies an ad-hoc signature after compilation. These are binary structural checks, not proof of loading inside foobar.
 
@@ -32,11 +34,14 @@ Windows uses the official SDK library project references and Visual Studio 2022/
 | cache | Persistent URL/metadata round trips, expiry, negative artwork records, corrupt/mismatched/oversized records, unsafe URLs, disabled/unwritable storage, bounded eviction preserving unrelated files, batched maintenance, exact record expiry |
 | service | Slow obsolete lookups, stale-result rejection, disable/enable and cancellation, offline metadata fallback, custom-ID reconnection without redundant lookup, shutdown and idempotent stop, memoized keys, expiry-driven refresh |
 | native_ipc | Real Windows named-pipe or Unix-socket exchange: fragmented handshake, Listening payload/progress, process ID, acknowledgments, ping/pong and clear; missing endpoints fail promptly |
+| diagnostics | Normal/verbose filtering, runtime toggle, deferred delivery, bounded concurrent queue, repeat suppression, safe callback lifetime, failed sinks, candidate and URL logging |
 | Python contracts | Pinned dependencies, download checksums, native 7-Zip discovery/extraction/provisioning, SDK include setup, Debug/Release curl library layout, read-only workflow matrix and Python steps, native build command/inspection checks, all-target installable package contents and combined package validation, macOS mode preservation, native project references, PE architecture/export checks |
 
 Network metadata fixtures are injected at the production request boundary; a fake monotonic clock verifies rate limiting without long sleeps. Native IPC uses an isolated test endpoint instead of Discord's live endpoints. Production behavior retains default IPC discovery and real request timing. All tests operate on the production modules; native settings tests exercise the shared policy with a fake store, while the native builds compile the actual SDK adapters and preferences pages.
 
-Both workflows use the same composite dependency setup action. It reads the vcpkg revision from the dependency manifest. Sanitizer jobs use `--tests-only`, avoiding the unused foobar SDK download and native-only setup.
+The Windows job and both Mac jobs use the composite dependency setup action, which reads the vcpkg revision from the dependency manifest. The Intel Mac job reuses that same setup for both sanitizer passes. Compared with the original separate workflows, consolidation removes three runner jobs and their repeated checkouts/dependency setup. Both Windows architectures now share one job, so there are three native runner jobs and one packaging job. All four native builds remain. No specific cost reduction is guaranteed; compilation and sanitizer execution still consume runner time.
+
+When installing this change, remove the old repository-root `.github/workflows/sanitizers.yml`; leaving it there would still trigger the redundant workflow. The combined workflow is `build-test.yml`.
 
 ## Dependency provisioning
 
@@ -57,7 +62,7 @@ python tests/ci_contract_tests.py
 
 The Python contract tests require PyYAML; CI installs pinned PyYAML and provisions native 7-Zip for SDK extraction. Native build preparation and commands are scripted in `tools/prepare.py` and `tools/run.py`; see the workflow steps for platform flags and vcpkg setup.
 
-CTest emits `out/ci/test-results.xml`; failures print their log into the job output. Native DLLs are under `out/<Win32|x64>/Release/`. Mac bundles are under `out/xcode/Build/Products/Release/`. Native jobs stage verified intermediate inputs, retained for one day if packaging fails. These are CI transfers, not separate user installation packages.
+CTest emits `out/ci/test-results.xml` for ordinary Mac tests. Windows uses `out/tests-x86/` and `out/tests-x64/` with `out/ci/test-results-x86.xml` and `out/ci/test-results-x64.xml`. Sanitizer passes use `out/tests-address-undefined/` and `out/tests-thread/`, with reports `out/ci/test-results-address-undefined.xml` and `out/ci/test-results-thread.xml`. Failures print the corresponding logs into the job output. Native DLLs are under `out/<Win32|x64>/Release/`. Mac bundles are under `out/xcode/Build/Products/Release/`. Native jobs stage verified intermediate inputs, retained for one day if packaging fails. These are CI transfers, not separate user installation packages.
 
 The final macOS job waits for all four Release builds, combines the Intel and Apple Silicon executables with `lipo`, verifies both architectures, and signs and verifies the universal macOS bundle again. It then creates one ZIP-format `discord-foobar-rpc.fb2k-component` containing:
 

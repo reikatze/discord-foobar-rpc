@@ -62,7 +62,7 @@ HttpResponse HttpClient::get(const std::string& url,const Cancelled& cancelled) 
     const auto result=curl_easy_perform(c.get());
     if (cancelled() || result==CURLE_ABORTED_BY_CALLBACK) throw LookupCancelled();
     if (t.too_large) throw std::runtime_error("Metadata response exceeds size limit");
-    if (result!=CURLE_OK) throw std::runtime_error("Metadata service unavailable");
+    if (result!=CURLE_OK) throw std::runtime_error("Metadata request failed: "+std::string(curl_easy_strerror(result)));
     curl_easy_getinfo(c.get(),CURLINFO_RESPONSE_CODE,&t.response.status);
     return std::move(t.response);
 }

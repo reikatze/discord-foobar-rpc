@@ -5,20 +5,25 @@
 // Component-specific Objective-C name prevents collisions with other addons.
 @interface DiscordFoobarRPCPreferencesController : NSViewController
 @property(nonatomic,strong) NSButton* enabled;
+@property(nonatomic,strong) NSButton* verboseLogging;
 @property(nonatomic,strong) NSTextField* applicationID;
 @property(nonatomic,strong) NSTextField* statusLabel;
 @end
 @implementation DiscordFoobarRPCPreferencesController
 - (void)loadView {
-    NSView* view=[[NSView alloc] initWithFrame:NSMakeRect(0,0,500,270)];
+    NSView* view=[[NSView alloc] initWithFrame:NSMakeRect(0,0,500,340)];
     self.view=view;
     self.enabled=[NSButton checkboxWithTitle:@"Enable Discord Rich Presence" target:nil action:nil];
-    self.enabled.frame=NSMakeRect(15,225,465,24);[view addSubview:self.enabled];
+    self.enabled.frame=NSMakeRect(15,295,465,24);[view addSubview:self.enabled];
     NSTextField* label=[NSTextField labelWithString:@"Custom Discord application ID (optional)"];
-    label.frame=NSMakeRect(15,190,465,22);[view addSubview:label];
-    self.applicationID=[[NSTextField alloc] initWithFrame:NSMakeRect(15,158,465,26)];[view addSubview:self.applicationID];
+    label.frame=NSMakeRect(15,260,465,22);[view addSubview:label];
+    self.applicationID=[[NSTextField alloc] initWithFrame:NSMakeRect(15,228,465,26)];[view addSubview:self.applicationID];
     NSTextField* help=[NSTextField wrappingLabelWithString:@"Leave blank to use the built-in application. Its ID is not shown or saved in settings. MusicBrainz supplies missing metadata and cached cover art."];
-    help.frame=NSMakeRect(15,91,465,58);[view addSubview:help];
+    help.frame=NSMakeRect(15,161,465,58);[view addSubview:help];
+    self.verboseLogging=[NSButton checkboxWithTitle:@"Verbose diagnostic logging (foobar console)" target:nil action:nil];
+    self.verboseLogging.frame=NSMakeRect(15,128,465,24);[view addSubview:self.verboseLogging];
+    NSTextField* logHelp=[NSTextField wrappingLabelWithString:@"Errors and lookup summaries are always logged. Enable for candidates, request URLs and artwork URLs."];
+    logHelp.frame=NSMakeRect(15,84,465,40);[view addSubview:logHelp];
     NSButton* apply=[NSButton buttonWithTitle:@"Apply" target:self action:@selector(applySettings:)];
     apply.frame=NSMakeRect(385,52,95,28);[view addSubview:apply];
     NSButton* reset=[NSButton buttonWithTitle:@"Defaults" target:self action:@selector(resetSettings:)];
@@ -26,12 +31,13 @@
     self.statusLabel=[NSTextField wrappingLabelWithString:@""];self.statusLabel.frame=NSMakeRect(15,8,465,40);[view addSubview:self.statusLabel];
     auto settings=music_tracker::read_settings();
     self.enabled.state=settings.enabled?NSControlStateValueOn:NSControlStateValueOff;
+    self.verboseLogging.state=settings.verbose_logging?NSControlStateValueOn:NSControlStateValueOff;
     self.applicationID.stringValue=[NSString stringWithUTF8String:settings.custom_application_id.c_str()];
     self.statusLabel.stringValue=[NSString stringWithUTF8String:music_tracker::component_status().c_str()];
 }
 - (void)applySettings:(id)sender {
     (void)sender;
-    music_tracker::Settings settings{self.enabled.state==NSControlStateValueOn,self.applicationID.stringValue.UTF8String};
+    music_tracker::Settings settings{self.enabled.state==NSControlStateValueOn,self.applicationID.stringValue.UTF8String,self.verboseLogging.state==NSControlStateValueOn};
     if(!music_tracker::valid_application_id(settings.custom_application_id)) {
         self.statusLabel.stringValue=@"Enter a numeric application ID, or leave it blank.";return;
     }
@@ -39,7 +45,7 @@
     self.statusLabel.stringValue=[NSString stringWithUTF8String:music_tracker::component_status().c_str()];
 }
 - (void)resetSettings:(id)sender {
-    (void)sender;self.enabled.state=NSControlStateValueOn;self.applicationID.stringValue=@"";
+    (void)sender;self.verboseLogging.state=NSControlStateValueOff;self.enabled.state=NSControlStateValueOn;self.applicationID.stringValue=@"";
     self.statusLabel.stringValue=@"Defaults selected. Click Apply to save.";
 }
 @end

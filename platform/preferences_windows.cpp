@@ -12,6 +12,7 @@ public:
     BEGIN_MSG_MAP_EX(PreferencesDialog)
         MSG_WM_INITDIALOG(on_init)
         COMMAND_HANDLER_EX(IDC_ENABLED,BN_CLICKED,on_change)
+        COMMAND_HANDLER_EX(IDC_VERBOSE_LOGGING,BN_CLICKED,on_change)
         COMMAND_HANDLER_EX(IDC_APPLICATION_ID,EN_CHANGE,on_change)
     END_MSG_MAP()
     t_uint32 get_state() override {
@@ -39,10 +40,10 @@ private:
     }
     void on_change(UINT,int,CWindow){callback_->on_state_changed();}
     void load(const music_tracker::Settings& s) {
-        CheckDlgButton(IDC_ENABLED,s.enabled?BST_CHECKED:BST_UNCHECKED);uSetDlgItemText(m_hWnd,IDC_APPLICATION_ID,s.custom_application_id.c_str());
+        CheckDlgButton(IDC_ENABLED,s.enabled?BST_CHECKED:BST_UNCHECKED);CheckDlgButton(IDC_VERBOSE_LOGGING,s.verbose_logging?BST_CHECKED:BST_UNCHECKED);uSetDlgItemText(m_hWnd,IDC_APPLICATION_ID,s.custom_application_id.c_str());
     }
     music_tracker::Settings edited() {
-        pfc::string8 id;uGetDlgItemText(m_hWnd,IDC_APPLICATION_ID,id);return {IsDlgButtonChecked(IDC_ENABLED)==BST_CHECKED,id.c_str()};
+        pfc::string8 id;uGetDlgItemText(m_hWnd,IDC_APPLICATION_ID,id);return {IsDlgButtonChecked(IDC_ENABLED)==BST_CHECKED,id.c_str(),IsDlgButtonChecked(IDC_VERBOSE_LOGGING)==BST_CHECKED};
     }
 };
 class PreferencesPage : public preferences_page_impl<PreferencesDialog> {
