@@ -23,6 +23,22 @@ def verified_download(url,destination,sha256):
         destination.unlink(missing_ok=True)
         raise RuntimeError('Dependency checksum mismatch')
 
+def sevenzip():
+    for name in ['7zz','7z']:
+        if executable:=shutil.which(name):return executable
+    # The Windows runner installs 7-Zip here, even when its folder is not on PATH.
+    for variable in ['ProgramFiles','ProgramW6432']:
+        if folder:=os.environ.get(variable):
+            executable=Path(folder)/'7-Zip'/'7z.exe'
+            if executable.is_file():return str(executable)
+    raise RuntimeError('Native 7-Zip is required to extract the SDK (7zz or 7z). Install sevenzip on macOS or 7-Zip on Windows.')
+
+def extract_sdk(archive,sdk):
+    executable=sevenzip() # Discover the extractor before removing an existing dependency workspace.
+    if sdk.exists():shutil.rmtree(sdk)
+    run([executable,'x',archive,'-o'+str(sdk),'-y'])
+    if not (sdk/'foobar2000/SDK/foobar2000.h').is_file():raise RuntimeError('SDK layout mismatch')
+
 def patch_sdk_includes(sdk,include):
     # Only the freshly downloaded dependency workspace is changed, never the user's repository.
     namespace='http://schemas.microsoft.com/developer/msbuild/2003'
@@ -58,10 +74,7 @@ def main():
     dependencies=source/'third_party';sdk=dependencies/'foobar-sdk';archive=dependencies/'downloads'/'foobar-sdk.7z'
     if not args.tests_only:
         verified_download(pins['sdk']['url'],archive,pins['sdk']['sha256'])
-        if sdk.exists():shutil.rmtree(sdk)
-        import py7zr
-        with py7zr.SevenZipFile(archive,'r') as data:data.extractall(sdk)
-        if not (sdk/'foobar2000/SDK/foobar2000.h').is_file():raise RuntimeError('SDK layout mismatch')
+        extract_sdk(archive,sdk)
     if windows:run([vcpkg/'bootstrap-vcpkg.bat','-disableMetrics'],shell=True)
     else:run(['sh',vcpkg/'bootstrap-vcpkg.sh','-disableMetrics'])
     installed_root=dependencies/'vcpkg-installed'

@@ -34,6 +34,37 @@ class CIContracts(unittest.TestCase):
             with self.assertRaises(RuntimeError):prepare.verified_download(original.as_uri(),destination,digest)
             self.assertFalse(destination.exists())
 
+    def test_native_7zip_discovery_and_windows_installation_path(self):
+        with patch.object(prepare.shutil,'which',side_effect=lambda name:'/tools/7zz' if name=='7zz' else None):self.assertEqual(prepare.sevenzip(),'/tools/7zz')
+        with patch.object(prepare.shutil,'which',side_effect=lambda name:'/tools/7z' if name=='7z' else None):self.assertEqual(prepare.sevenzip(),'/tools/7z')
+        with tempfile.TemporaryDirectory() as tmp:
+            exe=Path(tmp)/'7-Zip/7z.exe';exe.parent.mkdir();exe.write_bytes(b'fixture')
+            with patch.object(prepare.shutil,'which',return_value=None),patch.dict(os.environ,{'ProgramFiles':tmp},clear=True):self.assertEqual(prepare.sevenzip(),str(exe))
+        with patch.object(prepare.shutil,'which',return_value=None),patch.dict(os.environ,{},clear=True),self.assertRaisesRegex(RuntimeError,'Native 7-Zip'):prepare.sevenzip()
+
+    def test_sdk_native_extraction_handles_spaces_and_checks_layout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);archive=root/'SDK download.7z';archive.write_bytes(b'fixture');sdk=root/'SDK extracted'
+            def extract(args):
+                self.assertEqual(args,['/tools/7zz','x',archive,'-o'+str(sdk),'-y'])
+                header=sdk/'foobar2000/SDK/foobar2000.h';header.parent.mkdir(parents=True);header.write_text('fixture')
+            sdk.mkdir();(sdk/'stale').write_text('old dependency')
+            with patch.object(prepare,'sevenzip',return_value='/tools/7zz'),patch.object(prepare,'run',side_effect=extract):prepare.extract_sdk(archive,sdk)
+            self.assertFalse((sdk/'stale').exists())
+            with patch.object(prepare,'sevenzip',return_value='/tools/7zz'),patch.object(prepare,'run'),self.assertRaisesRegex(RuntimeError,'SDK layout mismatch'):prepare.extract_sdk(archive,sdk)
+            with patch.object(prepare,'sevenzip',return_value='/tools/7zz'),patch.object(prepare,'run',side_effect=RuntimeError('extract failed')),self.assertRaisesRegex(RuntimeError,'extract failed'):prepare.extract_sdk(archive,sdk)
+
+    def test_shared_setup_provisions_native_sdk_extractor(self):
+        action=yaml.load((SOURCE/'.github/actions/setup/action.yml').read_text(),Loader=yaml.BaseLoader)
+        code=next(x['run'] for x in action['runs']['steps'] if x.get('name')=='Provision dependencies')
+        for platform,native,available,install in [('darwin',True,False,True),('darwin',True,True,False),('darwin',False,False,False),('win32',True,False,False)]:
+            with tempfile.TemporaryDirectory() as tmp,patch.dict(os.environ,{'DMT_SOURCE':tmp,'DMT_NATIVE_BUILD':str(native).lower(),'DMT_ARCH':'x64'}),patch.object(prepare.sys,'platform',platform),patch.object(prepare.shutil,'which',return_value='/tools/7zz' if available else None),patch.object(prepare.subprocess,'run') as run:
+                exec(compile(code,'setup action','exec'),{})
+                calls=[x.args[0] for x in run.call_args_list]
+                self.assertEqual(['brew','install','sevenzip'] in calls,install)
+                self.assertEqual('--tests-only' in calls[-1],not native)
+                self.assertNotIn('py7zr',str(calls))
+
     def test_sdk_include_patch_preserves_original_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);path=root/'dependency.vcxproj';ns='http://schemas.microsoft.com/developer/msbuild/2003'

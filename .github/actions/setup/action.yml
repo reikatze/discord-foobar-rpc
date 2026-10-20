@@ -44,13 +44,12 @@ runs:
         DMT_ARCH: ${{ inputs.arch }}
         DMT_NATIVE_BUILD: ${{ inputs.native-build }}
       run: |
-        import os, subprocess, sys
+        import os, shutil, subprocess, sys
         from pathlib import Path
-        packages = ['PyYAML==6.0.3']
         native = os.environ['DMT_NATIVE_BUILD'] == 'true'
-        if native:
-            packages.append('py7zr==1.0.0')
-        subprocess.run([sys.executable, '-m', 'pip', 'install', *packages], check=True)
+        if native and sys.platform == 'darwin' and not shutil.which('7zz'):
+            subprocess.run(['brew', 'install', 'sevenzip'], check=True)
+        subprocess.run([sys.executable, '-m', 'pip', 'install', 'PyYAML==6.0.3'], check=True)
         source = Path(os.environ['DMT_SOURCE'])
         command = [sys.executable, str(source / 'tools/prepare.py'), '--source', str(source), '--vcpkg', str(Path.cwd() / '.ci/vcpkg'), '--arch', os.environ['DMT_ARCH']]
         if not native:

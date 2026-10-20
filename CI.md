@@ -17,7 +17,7 @@ Both workflows trigger on push, pull request and manual dispatch. Permissions ar
 | macos-15-intel | x86_64 | Debug, Release | `discord-foobar-rpc.component` |
 | macos-15 | arm64 | Debug, Release | `discord-foobar-rpc.component` |
 
-Each job runs 13 Python CI-helper contract tests and seven CTest executables, then builds the native addon. Tests must pass before the addon build runs. Mac sanitizer jobs additionally run AddressSanitizer/UndefinedBehaviorSanitizer or ThreadSanitizer on the production core and tests.
+Each job runs 16 Python CI-helper contract tests and seven CTest executables, then builds the native addon. Tests must pass before the addon build runs. Mac sanitizer jobs additionally run AddressSanitizer/UndefinedBehaviorSanitizer or ThreadSanitizer on the production core and tests.
 
 Windows uses the official SDK library project references and Visual Studio 2022/MSBuild. macOS uses the SDK library projects in the workspace and a shared component scheme. Build inspection checks the real exported `foobar2000_get_interface` entrypoint; Windows inspection also checks the DLL architecture/type. Mac inspection checks architecture and verifies an ad-hoc signature after compilation. These are binary structural checks, not proof of loading inside foobar.
 
@@ -32,7 +32,7 @@ Windows uses the official SDK library project references and Visual Studio 2022/
 | cache | Persistent URL/metadata round trips, expiry, negative artwork records, corrupt/mismatched/oversized records, unsafe URLs, disabled/unwritable storage, bounded eviction preserving unrelated files, batched maintenance, exact record expiry |
 | service | Slow obsolete lookups, stale-result rejection, disable/enable and cancellation, offline metadata fallback, custom-ID reconnection without redundant lookup, shutdown and idempotent stop, memoized keys, expiry-driven refresh |
 | native_ipc | Real Windows named-pipe or Unix-socket exchange: fragmented handshake, Listening payload/progress, process ID, acknowledgments, ping/pong and clear; missing endpoints fail promptly |
-| Python contracts | Pinned dependencies, download checksums, SDK include setup, Debug/Release curl library layout, read-only workflow matrix and Python steps, native build command/inspection checks, all-target artifact staging/checksums, macOS mode preservation, native project references, PE architecture/export checks |
+| Python contracts | Pinned dependencies, download checksums, native 7-Zip discovery/extraction/provisioning, SDK include setup, Debug/Release curl library layout, read-only workflow matrix and Python steps, native build command/inspection checks, all-target artifact staging/checksums, macOS mode preservation, native project references, PE architecture/export checks |
 
 Network metadata fixtures are injected at the production request boundary; a fake monotonic clock verifies rate limiting without long sleeps. Native IPC uses an isolated test endpoint instead of Discord's live endpoints. Production behavior retains default IPC discovery and real request timing. All tests operate on the production modules; native settings tests exercise the shared policy with a fake store, while the native builds compile the actual SDK adapters and preferences pages.
 
@@ -40,7 +40,7 @@ Both workflows use the same composite dependency setup action. It reads the vcpk
 
 ## Dependency provisioning
 
-`tools/dependencies.json` pins the official SDK 2026-10-01 URL/SHA-256 and the vcpkg 2026.07.29 commit. The SDK download fails on any checksum mismatch. vcpkg installs nlohmann/json on both platforms, and WTL plus static curl/zlib with Schannel on Windows. CI supplies x86/x64 triplets with static dependency libraries and the DLL CRT. Downloaded SDK project include paths are adjusted only inside that job's dependency workspace to find WTL. Source/repository project files are not edited by CI.
+`tools/dependencies.json` pins the official SDK 2026-10-01 URL/SHA-256 and the vcpkg 2026.07.29 commit. The SDK download fails on any checksum mismatch. SDK extraction uses native 7-Zip because the archive contains BCJ2-compressed data. Windows uses the runner’s installed `7z.exe`; macOS uses `7zz`, installing Homebrew `sevenzip` if needed. Python `py7zr` is not used. vcpkg installs nlohmann/json on both platforms, and WTL plus static curl/zlib with Schannel on Windows. CI supplies x86/x64 triplets with static dependency libraries and the DLL CRT. Downloaded SDK project include paths are adjusted only inside that job's dependency workspace to find WTL. Source/repository project files are not edited by CI.
 
 The runner downloads tools/dependencies during provisioning; the tests themselves do not call MusicBrainz, Cover Art Archive or Discord's network services. There are no API keys, Discord credentials or music uploads.
 
@@ -55,7 +55,7 @@ ctest --test-dir out/tests --build-config Debug --output-on-failure
 python tests/ci_contract_tests.py
 ```
 
-The Python contract tests require PyYAML; CI installs pinned PyYAML and py7zr versions. Native build preparation and commands are scripted in `tools/prepare.py` and `tools/run.py`; see the workflow steps for platform flags and vcpkg setup.
+The Python contract tests require PyYAML; CI installs pinned PyYAML and provisions native 7-Zip for SDK extraction. Native build preparation and commands are scripted in `tools/prepare.py` and `tools/run.py`; see the workflow steps for platform flags and vcpkg setup.
 
 CTest emits `out/ci/test-results.xml`; failures print their log into the job output. Native DLLs are under `out/<Win32|x64>/<Debug|Release>/`. Mac bundles are under `out/xcode/Build/Products/<Debug|Release>/`. After binary inspection succeeds, `tools/run.py` stages one artifact under `out/artifacts/discord-foobar-rpc-<platform>-<arch>-<configuration>/`. Windows stages the real DLL; macOS archives the complete `.component` bundle as a tar.gz to preserve executable permissions, bundle contents and signing data during artifact download. Each artifact includes `LICENSE`, `THIRD_PARTY_NOTICES.md`, and `SHA256SUMS.txt`. A missing or empty native binary fails staging.
 
