@@ -60,9 +60,9 @@ def normalized_curl(installed,destination,platform):
     for config,sub in [('Release','lib'),('Debug','debug/lib')]:
         folder=destination/'lib'/platform/config;folder.mkdir(parents=True,exist_ok=True)
         libs=list((installed/sub).glob('*.lib'))
-        for prefix,target in [('libcurl','libcurl.lib'),('zlib','zlib.lib')]:
-            selected=[p for p in libs if p.stem.lower().startswith(prefix)]
-            if len(selected)!=1:raise RuntimeError(f'Expected one {prefix} static library, found {selected}')
+        for names,target in [(('libcurl','libcurl-d'),'libcurl.lib'),(('zlib','zlibd','zlib1','zlibd1'),'zlib.lib')]:
+            selected=[p for p in libs if p.stem.lower() in names]
+            if len(selected)!=1:raise RuntimeError(f'Expected one {target} static library, found {selected}; available: {libs}')
             shutil.copy2(selected[0],folder/target)
 
 def main():

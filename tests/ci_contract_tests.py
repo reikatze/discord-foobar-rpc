@@ -76,12 +76,36 @@ class CIContracts(unittest.TestCase):
     def test_static_curl_layout_normalizes_debug_and_release(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);installed=root/'installed';dest=root/'curl';(installed/'include/curl').mkdir(parents=True);(installed/'include/curl/curl.h').write_text('header')
-            for sub,curl,zlib in [('lib','libcurl.lib','zlib.lib'),('debug/lib','libcurl-d.lib','zlibd.lib')]:
+            for sub,curl,zlib in [('lib','libcurl.lib','zlib1.lib'),('debug/lib','libcurl-d.lib','zlibd1.lib')]:
                 folder=installed/sub;folder.mkdir(parents=True);(folder/curl).write_bytes(b'curl');(folder/zlib).write_bytes(b'zlib')
             prepare.normalized_curl(installed,dest,'x64')
             for config in ['Debug','Release']:
                 self.assertTrue((dest/'lib/x64'/config/'libcurl.lib').is_file())
                 self.assertTrue((dest/'lib/x64'/config/'zlib.lib').is_file())
+
+    def test_sdk_factory_classes_allow_sdk_inheritance(self):
+        import re
+        for relative in ['main.cpp','platform/preferences_macos.mm','platform/preferences_windows.cpp']:
+            text=(SOURCE/relative).read_text()
+            classes=re.findall(r'FB2K_SERVICE_FACTORY\((\w+)\)|preferences_page_factory_t<(\w+)>',text)
+            self.assertTrue(classes,relative)
+            for pair in classes:
+                name=next(x for x in pair if x)
+                self.assertRegex(text,r'class\s+'+name+r'\s*:')
+
+    def test_static_curl_layout_accepts_legacy_names_and_rejects_ambiguity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);installed=root/'installed';dest=root/'curl'
+            (installed/'include/curl').mkdir(parents=True)
+            for sub in ['lib','debug/lib']:
+                folder=installed/sub;folder.mkdir(parents=True)
+                (folder/'libcurl.lib').write_bytes(b'curl')
+                (folder/'zlib.lib').write_bytes(b'zlib')
+                (folder/'zlib-unrelated.lib').write_bytes(b'unrelated')
+            prepare.normalized_curl(installed,dest,'Win32')
+            (installed/'lib/zlib1.lib').write_bytes(b'ambiguous')
+            with self.assertRaisesRegex(RuntimeError,'Expected one zlib.lib'):
+                prepare.normalized_curl(installed,dest,'Win32')
 
     def test_workflow_matrix_is_complete_and_read_only(self):
         workflow=yaml.load((SOURCE/'.github/workflows/build-test.yml').read_text(),Loader=yaml.BaseLoader)

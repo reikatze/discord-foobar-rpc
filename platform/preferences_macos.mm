@@ -44,7 +44,7 @@
 }
 @end
 namespace {
-class MusicPreferencesPage final : public preferences_page {
+class MusicPreferencesPage : public preferences_page {
 public:
     service_ptr instantiate() override {return fb2k::wrapNSObject([DiscordFoobarRPCPreferencesController new]);}
     const char* get_name() override {return "discord-foobar-rpc";}

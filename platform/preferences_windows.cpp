@@ -45,7 +45,7 @@ private:
         pfc::string8 id;uGetDlgItemText(m_hWnd,IDC_APPLICATION_ID,id);return {IsDlgButtonChecked(IDC_ENABLED)==BST_CHECKED,id.c_str()};
     }
 };
-class PreferencesPage final : public preferences_page_impl<PreferencesDialog> {
+class PreferencesPage : public preferences_page_impl<PreferencesDialog> {
 public:
     const char* get_name() override {return "discord-foobar-rpc";}
     GUID get_guid() override {return {0xb2d44603,0xaca1,0x4496,{0x8e,0xf1,0xdb,0xa6,0xec,0xc8,0x29,0x03}};}

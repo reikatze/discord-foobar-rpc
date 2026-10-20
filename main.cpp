@@ -7,7 +7,7 @@ VALIDATE_COMPONENT_FILENAME("discord-foobar-rpc.dll");
 #endif
 FOOBAR2000_IMPLEMENT_CFG_VAR_DOWNGRADE;
 namespace {
-class ComponentLifecycle final : public initquit {
+class ComponentLifecycle : public initquit {
 public:
     void on_init() override {music_tracker::start_component();}
     void on_quit() override {music_tracker::stop_component();}
