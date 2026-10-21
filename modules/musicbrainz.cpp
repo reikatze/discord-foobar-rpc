@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
-#include <set>
 #include <thread>
 namespace music_tracker {
 namespace {
@@ -62,8 +61,7 @@ const json* pick_recording(const json& rows,const Track& t,const std::function<v
     if(second>=0 && best_score-second<3){if(rejected&&best)rejected(*best,"ambiguous recording scores");return nullptr;}
     return best;
 }
-// Recording identity can remain ambiguous while exactly one studio album is known.
-// Live/single/compilation appearances do not have to contain that studio album.
+// Recording identity can remain ambiguous while artwork uses the first verified studio album.
 std::string studio_group(const json& release) {
     if(!release.is_object()||normalized(text_field(release,"status"))!="official"||
        !release.contains("release-group")||!release["release-group"].is_object())return {};
@@ -73,16 +71,15 @@ std::string studio_group(const json& release) {
     if(group.contains("secondary-types")&&(!group["secondary-types"].is_array()||!group["secondary-types"].empty()))return {};
     return id_of(group);
 }
-std::string unique_studio_album(const std::vector<json>& rows) {
-    std::set<std::string> albums;
-    for(const auto& row:rows) {
-        if(!equal_name(row.value("title",std::string{}),rows.front().value("title",std::string{}))||
+std::string first_studio_album(const std::vector<json>& rows) {
+    // Resolve the song/artist interpretation before choosing any album.
+    for(const auto& row:rows)
+        if(!equal_name(text_field(row,"title"),text_field(rows.front(),"title"))||
            !equal_name(credited(row),credited(rows.front())))return {};
-        if(row.contains("releases")&&row["releases"].is_array())for(const auto& release:row["releases"]) {
-            if(auto id=studio_group(release);!id.empty())albums.insert(id);
-        }
-    }
-    return albums.size()==1?*albums.begin():std::string{};
+    for(const auto& row:rows)
+        if(row.contains("releases")&&row["releases"].is_array())for(const auto& release:row["releases"])
+            if(auto id=studio_group(release);!id.empty())return id;
+    return {};
 }
 
 void find_release_track(const json& release,const Track& t,Metadata& result) {
@@ -311,6 +308,7 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
         }
         json verified=nullptr;
         std::map<std::string,json> exact, duration_matches;
+        std::vector<std::string> recording_order;
         for(const auto& interpretation:searches) {
             std::string query="recording:"+literal(interpretation.title);
             if(!interpretation.artist.empty())query+=" AND artist:"+literal(interpretation.artist);
@@ -327,7 +325,7 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
                 auto single=json::array({row});
                 if(!pick_recording(single,names,rejected))continue;
                 const auto id=id_of(row);
-                exact.emplace(id,row);
+                if(exact.emplace(id,row).second)recording_order.push_back(id);
                 if(!std::isfinite(t.duration)||t.duration<=0)duration_matches.emplace(id,row);
                 else if(row.contains("length")&&row["length"].is_number()) {
                     const auto seconds=row["length"].get<double>()/1000.0;
@@ -353,6 +351,11 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
                     else ++it;
                 }
             }
+            auto ordered_candidates=[&] {
+                std::vector<json> rows;
+                for(const auto& id:recording_order)if(auto it=pool.find(id);it!=pool.end())rows.push_back(it->second);
+                return rows;
+            };
             bool same_names=!pool.empty();
             for(const auto& entry:pool)if(!equal_name(entry.second.value("title",std::string{}),pool.begin()->second.value("title",std::string{}))||
                 !equal_name(credited(entry.second),credited(pool.begin()->second)))same_names=false;
@@ -386,13 +389,13 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
                 result.title=pool.begin()->second.value("title",std::string{});
                 result.artist=credited(pool.begin()->second);
                 hydrate_albums(pool);
-                std::vector<json> candidates;for(const auto& entry:pool)candidates.push_back(entry.second);
+                auto candidates=ordered_candidates();
                 const auto& first=pool.begin()->second;
                 const bool no_editions=!first.contains("releases")||!first["releases"].is_array()||first["releases"].empty();
-                if(t.filename_has_video_hint&&t.album.empty()&&(pool.size()>1||no_editions)&&unique_studio_album(candidates).empty()) {
+                if(t.filename_has_video_hint&&t.album.empty()&&(pool.size()>1||no_editions)&&first_studio_album(candidates).empty()) {
                     // The first page may contain only standalone videos or live versions.
                     // Search explicitly for album audio after the name order is verified.
-                    diagnostics_.detail(log_scope_,"No unique studio album in initial recording results; searching album recordings");
+                    diagnostics_.detail(log_scope_,"No verified studio album in initial recording results; searching album recordings");
                     const auto query="recording:"+literal(result.title)+" AND artist:"+literal(result.artist)+
                         " AND video:false AND primarytype:album AND status:official";
                     auto data=request("recording/?query="+url_encode(query)+"&limit=25&fmt=json",cancelled);
@@ -401,7 +404,10 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
                         Track names;names.title=result.title;names.artist=result.artist;
                         for(const auto& row:data["recordings"]) {
                             if(row.is_object()&&row.contains("video")&&row["video"]==true)continue;
-                            if(pick_recording(json::array({row}),names,rejected))album_recordings.emplace(id_of(row),row);
+                            if(pick_recording(json::array({row}),names,rejected)) {
+                                const auto id=id_of(row);album_recordings.emplace(id,row);
+                                if(std::find(recording_order.begin(),recording_order.end(),id)==recording_order.end())recording_order.push_back(id);
+                            }
                         }
                     }
                     hydrate_albums(album_recordings);
@@ -419,13 +425,16 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
 
             if(pool.size()==1)verified=pool.begin()->second;
             else if(!pool.empty()) {
-                std::vector<json> candidates;for(const auto& entry:pool)candidates.push_back(entry.second);
-                const auto album_id=albums_complete?unique_studio_album(candidates):std::string{};
+                auto candidates=ordered_candidates();
+                // Preserve MusicBrainz response order rather than MBID sort order.
+                // Unknown editions are excluded; the first verified studio album wins.
+                const auto album_id=first_studio_album(candidates);
                 if(!album_id.empty()) {
                     result.title=candidates.front().value("title",std::string{});
                     result.artist=credited(candidates.front());
                     result.release_group_id=album_id;
-                    diagnostics_.detail(log_scope_,"Selected unique studio album group "+album_id);
+                    diagnostics_.info(log_scope_,"Selected first verified studio album group "+album_id+
+                        (albums_complete?"":"; unclassified releases excluded"));
                     // No recording ID or remote duration is invented for agreeing editions.
                 } else {
                     std::map<std::string,std::string> albums;
@@ -437,7 +446,7 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
                         }
                     std::string summary;
                     for(const auto& entry:albums){if(!summary.empty())summary+="; ";summary+=entry.second+" ("+entry.first+")";if(summary.size()>800){summary+="; ...";break;}}
-                    diagnostics_.info(log_scope_,"No unique studio album among "+std::to_string(pool.size())+" exact-name recordings; studio albums: "+
+                    diagnostics_.info(log_scope_,"No eligible studio album among "+std::to_string(pool.size())+" exact-name recordings; studio albums: "+
                         (summary.empty()?"none":summary)+(albums_complete?"":"; release details incomplete"));
                 }
             }
@@ -445,7 +454,7 @@ LookupResult MusicBrainz::lookup_result(const Track& t,const Cancelled& cancelle
         if(!verified.is_null()) {
             recording=verified;recording_metadata(recording,result);
             if(filename_orders&&t.album.empty()&&result.release_group_id.empty()) {
-                const auto studio=unique_studio_album({recording});
+                const auto studio=first_studio_album({recording});
                 if(!studio.empty()) {
                     result.release_group_id=studio;
                     json editions=json::array();

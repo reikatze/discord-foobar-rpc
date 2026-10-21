@@ -10,18 +10,20 @@ struct LogHarness {
     bool contains(const std::string& text)const{for(const auto& line:lines)if(line.find(text)!=std::string::npos)return true;return false;}
 };
 int main(){Suite s;
- s.test("album ambiguity logs conflicting names and IDs without verbose logging",[]{
+ s.test("first verified album choice is logged without verbose logging",[]{
     TemporaryDirectory dir;MetadataCache cache(dir.path);LogHarness h;Track t;apply_filename_fallback(t,"Artist - Song (Official Video).webm");
     const std::string first="11111111-1111-4111-8111-111111111111",second="22222222-2222-4222-8222-222222222222";
     MonoClock::time_point now{};
     MusicBrainz mb(cache,[&](const std::string& url,const Cancelled&){
-        require(url.find("recording/?query=")!=std::string::npos,"Ambiguous albums triggered artwork lookup");json rows=json::array();
+        if(url.starts_with("https://musicbrainz.org/ws/2/release-group/")){require(url.find(first)!=std::string::npos,"Wrong album details requested");return HttpResponse{200,json{{"id",first},{"title","First album"}}.dump(),""};}
+        if(url.starts_with("https://coverartarchive.org/")){require(url.find(first)!=std::string::npos,"Wrong album artwork requested");return HttpResponse{200,json{{"images",json::array({{{"front",true},{"image","https://archive.org/first.jpg"}}})}}.dump(),""};}
+        require(url.find("recording/?query=")!=std::string::npos,"Unexpected album-selection request");json rows=json::array();
         if(url.find("recording%3A%22Song%22")!=std::string::npos)for(bool other:{false,true})rows.push_back({{"id",other?second:first},{"score",100},{"title","Song"},{"artist-credit",json::array({{{"name","Artist"}}})},
             {"releases",json::array({{{"id",other?second:first},{"title",other?"Second album":"First album"},{"status","Official"},{"release-group",{{"id",other?second:first},{"primary-type","Album"}}}}})}});
         return HttpResponse{200,json{{"recordings",rows}}.dump(),""};
     },{[&]{return now;},[&](auto target,const Cancelled&){now=target;}},h.log);
-    require(mb.lookup(t,[]{return false;}).artwork_url.empty(),"Conflicting album chosen");h.flush();
-    require(h.contains("First album")&&h.contains("Second album")&&h.contains(first)&&h.contains(second),"Album conflict explanation missing");
+    require(!mb.lookup(t,[]{return false;}).artwork_url.empty(),"First verified album was not selected");h.flush();
+    require(h.contains("Selected first verified studio album group "+first),"Album selection explanation missing");
  });
  s.test("normal logs are queued and verbose detail is opt-in",[]{LogHarness h;h.log.detail("lookup #1","secret detail");require(h.tasks.empty(),"Disabled verbose queued work");h.log.info("lookup #1","Lookup failed: HTTP 503");require(h.lines.empty()&&h.tasks.size()==1,"Worker printed synchronously");h.flush();require(h.contains("HTTP 503")&&!h.contains("secret detail"),"Normal logging lost failure or leaked verbose");auto copy=h.log;copy.set_verbose(true);h.log.detail("lookup #1","request URL");h.flush();require(h.contains("request URL"),"Runtime toggle not shared");});
  s.test("turning verbose off removes queued verbose details",[]{LogHarness h;h.log.set_verbose(true);h.log.detail("lookup","candidate");h.log.info("lookup","summary");h.log.set_verbose(false);h.flush();require(!h.contains("candidate")&&h.contains("summary"),"Queued detail printed after opt-out");});

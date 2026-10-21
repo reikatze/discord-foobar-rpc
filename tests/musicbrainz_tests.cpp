@@ -24,6 +24,83 @@ HttpResponse ordinary(const std::string& url){
 Track identified(){Track t;t.recording_id=recording;t.release_id=release;t.duration=180;return t;}
 }
 int main(){Suite s;
+ s.test("conflicting studio albums use response order rather than recording ID order",[]{
+    const std::string other="44444444-4444-4444-8444-444444444444";
+    for(bool fallback:{false,true})for(bool reverse:{false,true}) {
+        TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;Track t;apply_filename_fallback(t,"Artist - Song (Official Video).webm");
+        const auto expected=reverse?other:group;unsigned searches=0,covers=0;
+        f.response=[&](const std::string& url){
+            if(url.find("recording/?query=")!=std::string::npos) {
+                ++searches;json rows=json::array();
+                if(url.find("recording%3A%22Song%22")!=std::string::npos) {
+                    if(fallback&&url.find("video%3Afalse")==std::string::npos)
+                        rows.push_back({{"id",other},{"score",100},{"title","Song"},{"artist-credit",credits("Artist")},{"video",true}});
+                    else for(unsigned i=0;i<2;++i) {
+                        const auto n=reverse?1-i:i;const auto album=n?other:group;
+                        json live={{"id",other},{"status","Official"},{"release-group",{{"id",other},{"primary-type","Album"},{"secondary-types",json::array({"Live"})}}}};
+                        json first={{"id",album},{"status","Official"},{"release-group",{{"id",album},{"primary-type","Album"}}}};
+                        auto later=first;later["release-group"]["id"]=n?group:other;
+                        rows.push_back({{"id",n?recording:release},{"score",100},{"title","Song"},{"artist-credit",credits("Artist")},{"releases",json::array({live,first,later})}});
+                    }
+                }
+                return ok({{"recordings",rows}});
+            }
+            if(url.starts_with("https://musicbrainz.org/ws/2/release-group/")){require(url.find(expected)!=std::string::npos,"Album chosen by ID order");return ok({{"id",expected},{"title","First verified album"}});}
+            if(url.starts_with("https://coverartarchive.org/")){++covers;require(url.find(expected)!=std::string::npos,"Cover did not use first verified album");return ordinary(url);}
+            throw std::runtime_error("Unexpected ordered album request");
+        };
+        MusicBrainz mb(cache,f.request(),f.timing());const auto m=mb.lookup(t,[]{return false;});
+        require(m.release_group_id==expected&&!m.artwork_url.empty()&&m.recording_id.empty()&&covers==1,"First verified album was not used");
+        require(searches==(fallback?3U:2U),"Unnecessary album fallback search");
+    }
+ });
+ s.test("unclassified releases do not veto verified studio artwork",[]{
+    const std::string facelift="7d026b9c-9159-34b5-a40d-14f134718394",unknown="84369cde-83a3-4903-a4a9-0117fa874bab";
+    for(int mode:{0,1,2,3,4,5}) {
+        TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;Track t;t.duration=286;
+        apply_filename_fallback(t,"Man in the Box (Official Video) [TAqZb52sgpU] - Alice In Chains.webm");
+        unsigned covers=0,details=0;
+        f.response=[&](const std::string& url){
+            if(url.find("recording/?query=")!=std::string::npos) {
+                json rows=json::array();
+                if(url.find("video%3Afalse")!=std::string::npos) {
+                    json editions=json::array({{{"id",unknown},{"title","Unclassified edition"}}});
+                    if(mode==3)for(unsigned i=0;i<7;++i){
+                        std::ostringstream id;id<<std::hex<<std::setw(8)<<std::setfill('0')<<i<<"-1111-4111-8111-111111111111";
+                        editions.push_back({{"id",id.str()},{"title","Unclassified edition"}});
+                    }
+                    rows.push_back({{"id",release},{"score",100},{"title","Man in the Box"},{"artist-credit",credits("Alice in Chains")},{"releases",editions}});
+                    if(mode!=5) {
+                        json studio={{"id",group},{"title","Facelift"},{"status","Official"},{"release-group",{{"id",facelift},{"primary-type","Album"}}}};
+                        rows.push_back({{"id",recording},{"score",100},{"title","Man in the Box"},{"artist-credit",credits("Alice in Chains")},{"releases",json::array({studio})}});
+                        if(mode==4){studio["release-group"]["id"]=group;studio["title"]="Conflicting studio album";rows.back()["releases"].push_back(studio);}
+                    }
+                } else if(url.find("recording%3A%22Man%20in%20the%20Box%22")!=std::string::npos) {
+                    rows.push_back({{"id","5c6e1ff2-f262-48e9-ab14-2e87033fdd5f"},{"score",100},{"title","Man in the Box"},{"artist-credit",credits("Alice in Chains")},{"length",270000},{"video",true}});
+                }
+                return ok({{"recordings",rows}});
+            }
+            if(url.starts_with("https://musicbrainz.org/ws/2/release/")) {
+                ++details;if(mode==2)return HttpResponse{404,"",""};
+                return ok({{"id",unknown},{"status",mode==1?json("Official"):json(nullptr)},
+                    {"release-group",{{"id",unknown},{"primary-type",mode==1?json(nullptr):json("Album")}}}});
+            }
+            if(url.starts_with("https://musicbrainz.org/ws/2/release-group/")) {
+                require(url.find(facelift)!=std::string::npos,"Unclassified or conflicting album selected");return ok({{"id",facelift},{"title","Facelift"}});
+            }
+            if(url.starts_with("https://coverartarchive.org/")) {
+                ++covers;require(url.find(facelift)!=std::string::npos,"Unclassified artwork requested");return ordinary(url);
+            }
+            throw std::runtime_error("Unexpected incomplete-release endpoint");
+        };
+        MusicBrainz mb(cache,f.request(),f.timing());auto m=mb.lookup(t,[]{return false;});
+        require(m.title=="Man in the Box"&&m.artist=="Alice in Chains"&&m.recording_id.empty()&&m.duration==0,"Album artwork invented a recording identity");
+        require(details>0&&details<=6,"Detail budget was ignored");
+        if(mode<5){require(m.album=="Facelift"&&m.release_group_id==facelift&&!m.artwork_url.empty()&&covers==1,"Incomplete edition vetoed verified Facelift artwork");
+            Playback p;p.active=true;p.track=t;PlaybackClock clock;require(make_activity(p,m,clock)["assets"]["large_image"]==m.artwork_url,"Cover absent from Discord activity");}
+        else require(m.artwork_url.empty()&&m.release_group_id.empty()&&covers==0,"Unknown or conflicting albums selected artwork");
+    }
+ });
  s.test("duplicate releases do not exhaust the album detail budget",[]{
     TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;Track t;apply_filename_fallback(t,"Artist - Song (Official Video).webm");
     const std::string other="44444444-4444-4444-8444-444444444444";unsigned details=0;
@@ -94,7 +171,7 @@ int main(){Suite s;
         else {
             const auto m=mb.lookup(t,[]{return false;});
             require(m.title=="Man in the Box"&&m.artist=="Alice in Chains"&&m.recording_id.empty()&&m.duration==0,"Album fallback changed recording identity or timing");
-            if(outcome==0) {
+            if(outcome==0||outcome==1) {
                 require(m.album=="Facelift"&&m.release_group_id==group&&!m.artwork_url.empty()&&m.complete&&covers==1,"Standalone video results blocked album artwork");
                 Playback p;p.active=true;p.track=t;PlaybackClock clock;
                 require(make_activity(p,m,clock)["assets"]["large_image"]==m.artwork_url,"Recovered cover absent from Discord presence");
@@ -280,8 +357,8 @@ int main(){Suite s;
         require(activity["details"]=="Man in the Box"&&activity["state"]=="Alice in Chains"&&activity["assets"]["large_image"]==m.artwork_url,"Final presence incorrect");
     }
  });
- s.test("album consensus rejects differing names, studio albums, and live compilations",[]{
-    for(int mode:{0,1,2,3}) {
+ s.test("album matching rejects differing names and live compilations",[]{
+    for(int mode:{0,2,3}) {
         TemporaryDirectory dir;MetadataCache cache(dir.path);Fixture f;Track t;apply_filename_fallback(t,"Artist - Song (Official Video).webm");t.duration=200;
         f.response=[&](const std::string& url){
             require(url.find("recording/?query=")!=std::string::npos,"Ambiguous album triggered art lookup");
